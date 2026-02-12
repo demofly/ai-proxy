@@ -1,0 +1,94 @@
+# Squid Configuration - Upstream Proxy (Squid 6.10)
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# Host: {{ inventory_hostname }} ({{ ansible_host }})
+# Анонимный транспорт для access прокси
+
+# Не кешировать негативные ответы (4xx, 5xx)
+negative_ttl 0 seconds
+
+{% if enable_caching %}
+# Кеширование (для HTTP запросов)
+cache_dir ufs /var/spool/squid 100 16 256
+maximum_object_size 50 MB
+{% else %}
+# Кеширование отключено
+cache deny all
+{% endif %}
+
+{% if enable_logging %}
+# Журналирование
+access_log daemon:/var/log/squid/access.log squid
+cache_log /var/log/squid/cache.log
+{% else %}
+# Журналирование выключено
+access_log none
+cache_log /dev/null
+{% endif %}
+
+# ACL: только IP access прокси
+{% for host in groups['access_proxies'] %}
+acl access_proxy src {{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+
+# Порт
+http_port {{ squid_port }}
+
+# Правила доступа
+http_access allow access_proxy
+http_access deny all
+
+# Анонимность
+forwarded_for off
+via off
+
+request_header_access X-Forwarded-For deny all
+request_header_access Via deny all
+request_header_access X-Real-IP deny all
+
+reply_header_access Via deny all
+reply_header_access X-Cache deny all
+
+# Размеры памяти (динамический расчёт на основе RAM сервера)
+# Ограничение: не более 20% RAM сервера (1/5)
+{% set total_ram_mb = ansible_memtotal_mb | default(2048) %}
+{% set max_memory_mb = (total_ram_mb / 5) | int %}
+# Общий лимит памяти Squid: {{ max_memory_mb }} MB (20% от {{ total_ram_mb }} MB)
+memory_pools_limit {{ max_memory_mb }} MB
+
+# Таймауты (уменьшены для транзитного прокси)
+connect_timeout 15 seconds
+read_timeout 30 seconds
+request_timeout 30 seconds
+shutdown_lifetime 3 seconds
+
+# SMP - использование всех ядер CPU
+{% set cpu_cores = ansible_processor_vcpus | default(1) %}
+{% if cpu_cores > 1 %}
+workers {{ cpu_cores }}
+{% endif %}
+
+# Persistent connections - переиспользование соединений
+client_persistent_connections on
+server_persistent_connections on
+
+# Pipelining - параллельная обработка запросов
+pipeline_prefetch 10
+
+# Quick abort - быстрое освобождение ресурсов при отмене
+quick_abort_min 0 KB
+quick_abort_max 0 KB
+quick_abort_pct 100
+
+# ICP отключен
+icp_port 0
+
+# DNS
+dns_nameservers {{ dns_servers | join(' ') }}
+dns_v4_first on
+dns_retransmit_interval 2 seconds
+dns_timeout 15 seconds
+positive_dns_ttl 6 hours
+negative_dns_ttl 30 seconds
+
+# Буферизация логов для снижения I/O
+buffered_logs on

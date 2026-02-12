@@ -1,0 +1,196 @@
+# Squid Configuration - RU Proxy (Squid 6.10)
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# Host: {{ inventory_hostname }} ({{ ansible_host }})
+
+# Скрывает заголовки проксирования и выглядит как обычный браузер
+
+# Не кешировать негативные ответы (4xx, 5xx)
+negative_ttl 0 seconds
+
+{% if enable_caching %}
+# Кеширование (для HTTP запросов)
+cache_dir ufs /var/spool/squid 100 16 256
+maximum_object_size 50 MB
+{% else %}
+# Кеширование отключено
+cache deny all
+{% endif %}
+
+{% if enable_logging %}
+# Журналирование
+access_log daemon:/var/log/squid/access.log squid
+cache_log /var/log/squid/cache.log
+{% else %}
+# Журналирование отключено
+access_log none
+cache_log /dev/null
+{% endif %}
+
+{% if enable_auth %}
+# Настройка аутентификации (ОБЯЗАТЕЛЬНО ПЕРЕД ACL!)
+auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
+auth_param basic children 5 startup=5 idle=1
+auth_param basic realm "Squid Proxy Authentication"
+auth_param basic credentialsttl 2 hours
+auth_param basic casesensitive on
+
+acl authenticated proxy_auth REQUIRED
+{% endif %}
+
+# ACL для разрешённых ресурсов
+# Явный список доменов
+{% for domain in allowed_domains | default([]) %}
+acl allowed_domains dstdomain {{ domain }}
+{% endfor %}
+# Регулярные выражения для доменов (например \.ai$ — все домены зоны .ai)
+{% for pattern in allowed_domain_patterns | default([]) %}
+acl allowed_domain_regexp dstdom_regex -i {{ pattern }}
+{% endfor %}
+
+# HTTP порт
+http_port {{ squid_port }}
+
+{% if groups['upstreams'] is defined and groups['upstreams'] | length > 0 %}
+# Upstream прокси с автоматическим failover
+# userhash - балансировка по хэшу имени пользователя (sticky sessions)
+#            автоматический fallback на sourcehash для неаутентифицированных соединений
+# connect-fail-limit=2 - после 2 неудачных попыток пометить как недоступный
+# connect-timeout=5 - таймаут подключения 5 секунд (быстрое обнаружение проблем)
+{% for upstream_host in groups['upstreams'] %}
+{% set upstream = hostvars[upstream_host] %}
+cache_peer {{ upstream.ansible_host }} parent {{ upstream.squid_port }} 0 no-query userhash connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
+{% endfor %}
+
+# Время восстановления dead peer (проверять каждые 15 секунд)
+dead_peer_timeout {{ dead_peer_timeout | default('15 seconds') }}
+
+# Отключаем NetDB (не нужен при userhash балансировке)
+netdb_filename none
+
+# Направлять весь трафик через upstream прокси
+never_direct allow all
+
+# Fallback: если все upstream недоступны, пробовать прямое соединение
+{% if allow_direct_fallback | default(false) %}
+prefer_direct off
+{% endif %}
+{% endif %}
+
+# Правила доступа
+{% set has_domains = (allowed_domains | default([]) | length > 0) or (allowed_domain_patterns | default([]) | length > 0) %}
+
+{% if has_domains %}
+http_access allow authenticated allowed_domains
+http_access allow authenticated allowed_domain_regexp
+{% else %}
+# Нет ограничений по доменам - разрешаем все аутентифицированным
+http_access allow authenticated
+{% endif %}
+
+# Запрещаем все остальное
+http_access deny all
+
+# Отключение передачи информации о прокси
+forwarded_for off
+via off
+
+# Управление заголовками запросов (от клиента к серверу)
+request_header_access X-Forwarded-For deny all
+request_header_access X-Forwarded-Proto deny all
+request_header_access X-Real-IP deny all
+request_header_access X-Originating-IP deny all
+request_header_access Via deny all
+
+# Управление заголовками ответов (от сервера к клиенту)
+reply_header_access X-Cache deny all
+reply_header_access X-Cache-Lookup deny all
+reply_header_access Via deny all
+reply_header_access X-Squid-Error deny all
+reply_header_access Server deny all
+
+# Замена User-Agent на Chrome
+request_header_access User-Agent allow all
+request_header_replace User-Agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.405 Safari/537.36"
+
+# Добавляем заголовки обычного браузера
+request_header_add Accept "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+request_header_add Accept-Language "en-US,en;q=0.9"
+request_header_add Accept-Encoding "gzip, deflate, br"
+request_header_add Connection "keep-alive"
+request_header_add Upgrade-Insecure-Requests "1"
+request_header_add Sec-Fetch-Dest "document"
+request_header_add Sec-Fetch-Mode "navigate"
+request_header_add Sec-Fetch-Site "cross-site"
+request_header_add Sec-Fetch-User "?1"
+request_header_add Sec-Ch-Ua '"Google";v="8", "Chromium";v="138", "Google Chrome";v="138"'
+request_header_add Sec-Ch-Ua-Mobile "?0"
+request_header_add Sec-Ch-Ua-Platform '"Windows"'
+
+# Дополнительные заголовки для полной имитации браузера
+request_header_add DNT "1"
+request_header_add Cache-Control "max-age=0"
+
+# Настройки производительности
+connect_timeout 15 seconds
+read_timeout 30 seconds
+request_timeout 30 seconds
+persistent_request_timeout 60 seconds
+client_lifetime 1 hour
+half_closed_clients off
+shutdown_lifetime 3 seconds
+
+# SMP - использование всех ядер CPU
+{% set cpu_cores = ansible_processor_vcpus | default(1) %}
+{% if cpu_cores > 1 %}
+workers {{ cpu_cores }}
+{% endif %}
+
+# Persistent connections - переиспользование соединений
+client_persistent_connections on
+server_persistent_connections on
+
+# Pipelining - параллельная обработка запросов
+pipeline_prefetch 10
+
+# Quick abort - быстрое освобождение ресурсов при отмене
+quick_abort_min 0 KB
+quick_abort_max 0 KB
+quick_abort_pct 100
+
+# Retry при ошибках
+retry_on_error on
+forward_max_tries 3
+
+# Отключаем ротацию логов (управляется системой)
+logfile_rotate 0
+debug_options ALL,1
+
+# Размеры памяти (динамический расчёт на основе RAM сервера)
+# Ограничение: не более 20% RAM сервера (1/5)
+{% set total_ram_mb = ansible_memtotal_mb | default(2048) %}
+{% set max_memory_mb = (total_ram_mb / 5) | int %}
+{% set cache_mem_mb = (max_memory_mb * 0.6) | int %}
+# Общий лимит памяти Squid: {{ max_memory_mb }} MB (20% от {{ total_ram_mb }} MB)
+memory_pools_limit {{ max_memory_mb }} MB
+# Память для кеширования объектов: {{ cache_mem_mb }} MB (60% от лимита)
+cache_mem {{ cache_mem_mb }} MB
+maximum_object_size_in_memory 512 KB
+memory_replacement_policy lru
+
+# FTP настройки
+ftp_passive on
+ftp_sanitycheck on
+
+# ICP отключен
+icp_port 0
+
+# Настройки DNS
+dns_nameservers {{ dns_servers | join(' ') }}
+dns_v4_first on
+dns_retransmit_interval 2 seconds
+dns_timeout 15 seconds
+positive_dns_ttl 6 hours
+negative_dns_ttl 30 seconds
+
+# Буферизация логов для снижения I/O
+buffered_logs on

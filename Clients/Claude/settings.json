@@ -1,0 +1,17 @@
+{
+
+    "claudeCode.environmentVariables": [
+        {
+            "name": "HTTP_PROXY",
+            "value": "http://user:password@ai-proxy.example.net:443"
+        },
+        {
+            "name": "HTTPS_PROXY",
+            "value": "http://user:password@ai-proxy.example.net:443"
+        },
+        {
+            "name": "NO_PROXY",
+            "value": "localhost,127.0.0.1,::1"
+        }
+    ]
+}

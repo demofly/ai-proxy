@@ -1,0 +1,41 @@
+#!/usr/sbin/nft -f
+# nftables Configuration - Upstream Proxy
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# Host: {{ inventory_hostname }} ({{ ansible_host }})
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        # Allow established/related connections
+        ct state established,related accept
+
+        # Allow loopback
+        iif "lo" accept
+
+        # Allow SSH
+        tcp dport 22 accept
+
+        # Allow Squid only from access proxies
+{% for host in groups['access_proxies'] %}
+        ip saddr {{ hostvars[host]['ansible_host'] }} tcp dport {{ squid_port }} accept
+{% endfor %}
+
+        # Allow ICMP ping
+        icmp type echo-request accept
+        icmpv6 type echo-request accept
+
+        # Log dropped packets (optional, uncomment if needed)
+        # log prefix "nftables dropped: " flags all counter
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}

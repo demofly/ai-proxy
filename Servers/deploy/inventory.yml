@@ -1,0 +1,72 @@
+---
+all:
+  children:
+    access_proxies:
+      hosts:
+        access-01:
+          ansible_host: 5.6.7.8
+          keepalived_state: MASTER
+          keepalived_priority: 100
+      vars:
+        proxy_role: access
+        squid_port: 443
+        enable_auth: true
+        enable_logging: true
+        enable_caching: true
+        # Keepalived настройки
+        enable_keepalived: false
+        keepalived_vip: 1.1.1.1
+        # keepalived_interface: eth0  # Автоопределение через ansible_default_ipv4.interface
+        keepalived_vrid: 51
+        keepalived_auth_pass: AiPr0xy2024
+    upstreams:
+      hosts:
+        upstream-01:
+          ansible_host: 1.2.3.4
+      vars:
+        proxy_role: upstream
+        squid_port: 443
+        enable_auth: false
+        enable_logging: false
+        enable_caching: false
+
+  vars:
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+
+    # DNS серверы
+    dns_servers:
+      - 9.9.9.9
+      - 8.8.8.8
+      - 1.1.1.1
+
+    # Разрешённые домены (явный список)
+    allowed_domains:
+      - dashscope.aliyuncs.com
+      - .alibabacloud.com
+      - copilot-proxy.githubusercontent.com
+
+    # Разрешённые домены по регулярке (проверяется окончание домена)
+    allowed_domain_patterns:
+      # General - все домены зоны .ai
+      - '\.ai$'
+      # Utilities - CDN CF
+      - '(^|\.)cloudflare\.com$'
+      # Utilities - CDN VSCode
+      - '(^|\.)vscode-cdn\.net$'
+      # OpenAI / ChatGPT
+      - '(^|\.)(chatgpt|openai)\.com$'
+      # Anthropic Claude
+      - '(^|\.)(claude\.(ai|com)|(anthropic|claudeusercontent)\.com|sentry\.io)$'
+      # Grok
+      - '(^|\.)(grok|grokusercontent|grokipedia)\.com$'
+      # Google Gemini
+      - '(^|\.)((gemini|clients|aistudio|play)\.google\.com|(gstatic|googleusercontent|googleapis)\.com)$'
+      # Github Copilot
+      - '(^|\.)github(copilot)?\.com$'
+      # Microsoft Copilot / Azure OpenAI / Bing Chat / Azure AI
+      - '(^|\.)((bing(apis)?|msn|msedge)\.(com|net)|(copilot|designer|cognitive)\.microsoft\.com|(openai|cognitiveservices|ml)\.azure\.com|azureml\.net|microsoft(365|usercontent)?\.com|office(365)?\.com|azure(edge)?\.(com|net)|login\.(microsoftonline|live)\.com)$'
+      # Cursor AI (IDE)
+      - '(^|\.)cursor(api)?\.(sh|com|so)$'
+      # DeepL Translator
+      - '(^|\.)deepl\.com$'
