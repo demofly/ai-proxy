@@ -10,8 +10,8 @@ Clients/
 ├── Gemini/          # Конфигурация для Gemini Code Assist (VSCode)
 ├── FoxyProxy/       # Конфигурация для FoxyProxy (браузер)
 └── PowerShell/
-    ├── register-vars.ps    # Установка переменных окружения
-    └── unregister-vars.ps  # Удаление переменных окружения
+    ├── register-vars.ps1   # Установка переменных окружения
+    └── unregister-vars.ps1 # Удаление переменных окружения
 ```
 
 ## Настройки VSCode
@@ -40,17 +40,25 @@ Clients/
 Файл [`FoxyProxy/FoxyProxy.json`](FoxyProxy/FoxyProxy.json) содержит конфигурацию для браузерного расширения [FoxyProxy](https://getfoxyproxy.org/).
 
 Конфигурация настраивает проксирование только для AI-сервисов:
-- **Gemini** — gemini.google.com, aistudio.google.com
+- **Gemini** — gemini.google.com, aistudio.google.com, googleapis.com
 - **ChatGPT** — chatgpt.com, openai.com
 - **Claude** — claude.ai, anthropic.com
 - **Grok** — grok.com
 - **X AI** — x.ai
+- **DeepL** — deepl.com
+- **Alibaba Cloud AI** — dashscope.aliyuncs.com, alibabacloud.com
+- **Microsoft AI** — bing.com, copilot.microsoft.com, azure OpenAI и др.
+- **Cursor** — cursor.sh, cursor.com
+- **GitHub Copilot** — github.com, githubcopilot.com, copilot-proxy.githubusercontent.com
+- **CloudFlare** — cloudflare.com
+- **VSCode CDN** — vscode-cdn.net
+- **Все домены зоны .ai**
 
 ### Импорт конфигурации
 
 1. Установите расширение FoxyProxy для вашего браузера
 2. Отредактируйте файл `FoxyProxy.json`, заменив:
-   - `ai-proxy.example.net` — на адрес корпоративного прокси-сервера
+   - `ai-proxy.example.com` — на адрес корпоративного прокси-сервера
    - `USERNAME` и `PASSWORD` — на ваши учетные данные
 3. Откройте настройки расширения
 4. Перейдите в раздел **Import** → **Import from URL or file**
@@ -64,11 +72,11 @@ Clients/
 
 ### Регистрация переменных окружения скриптом или в консоли PowerShell
 
-Скрипт [`PowerShell/register-vars.ps`](PowerShell/register-vars.ps) устанавливает переменные окружения прокси на уровне пользователя Windows.
+Скрипт [`PowerShell/register-vars.ps1`](PowerShell/register-vars.ps1) устанавливает переменные окружения прокси на уровне пользователя Windows.
 
 В этом скрипте:
 1. Замените `user:password` на ваши учетные данные
-2. Замените `ai-proxy.example.net:443` на адрес корпоративного прокси-сервера (AI proxy)
+2. Замените `ai-proxy.example.com:443` на адрес корпоративного прокси-сервера (AI proxy)
 3. При необходимости добавьте дополнительные адреса в `NO_PROXY`
 
 Установка переменной для текущего пользователя:
@@ -81,7 +89,7 @@ Clients/
 
 #### Удаление переменных окружения
 
-Скрипт [`PowerShell/unregister-vars.ps`](PowerShell/unregister-vars.ps) удаляет ранее установленные переменные окружения прокси
+Скрипт [`PowerShell/unregister-vars.ps1`](PowerShell/unregister-vars.ps1) удаляет ранее установленные переменные окружения прокси
 
 ### Альтернативный способ - настройка профиля PowerShell
 
@@ -105,8 +113,8 @@ New-Item -Path $PROFILE -ItemType File -Force
 
 ```powershell
 # AI Proxy - переменные окружения
-$env:HTTP_PROXY = "http://user:password@proxy.example.net:443"
-$env:HTTPS_PROXY = "http://user:password@proxy.example.net:443"
+$env:HTTP_PROXY = "http://user:password@proxy.example.com:443"
+$env:HTTPS_PROXY = "http://user:password@proxy.example.com:443"
 $env:NO_PROXY = "localhost,127.0.0.1,::1,.local"
 ```
 

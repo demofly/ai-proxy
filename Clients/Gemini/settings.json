@@ -2,7 +2,7 @@
  
     "geminicodeassist.project": "MY_PROJECT_ID",
     
-    "http.proxy": "http://user:password@ai-proxy.example.net:443",
-    "https.proxy": "http://user:password@ai-proxy.example.net:443"
+    "http.proxy": "http://user:password@proxy.example.com:443",
+    "https.proxy": "http://user:password@proxy.example.com:443"
 
 }

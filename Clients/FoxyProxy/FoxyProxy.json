@@ -1,5 +1,5 @@
 {
-  "mode": "proxy.example.net:443",
+  "mode": "proxy.example.com:443",
   "sync": false,
   "autoBackup": false,
   "passthrough": "",
@@ -14,9 +14,9 @@
   "data": [
     {
       "active": true,
-      "title": "proxy.example.net",
+      "title": "proxy.example.com",
       "type": "http",
-      "hostname": "proxy.example.net",
+      "hostname": "proxy.example.com",
       "port": "443",
       "username": "USERNAME",
       "password": "PASSWORD",
@@ -30,7 +30,7 @@
         {
           "type": "regex",
           "title": "Gemini",
-          "pattern": "^https?://(.*\\.)*((gemini|clients|aistudio|play)\\.google\\.com|(gstatic|googleusercontent)\\.com)($|/)",
+          "pattern": "^https?://(.*\\.)*((gemini|clients|aistudio|play)\\.google\\.com|(gstatic|googleusercontent|googleapis)\\.com)($|/)",
           "active": true
         },
         {
@@ -78,7 +78,37 @@
         {
           "type": "regex",
           "title": "Github|Copilot",
-          "pattern": "^https?://(.*\\.)*\\.github(copilot)?\\.com($|/)",
+          "pattern": "^https?://(.*\\.)*github(copilot)?\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "DeepL",
+          "pattern": "^https?://(.*\\.)*deepl\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "Alibaba Cloud AI",
+          "pattern": "^https?://(.*\\.)*(dashscope\\.aliyuncs\\.com|alibabacloud\\.com)($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "VSCode CDN",
+          "pattern": "^https?://(.*\\.)*vscode-cdn\\.net($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "GitHub Copilot Proxy",
+          "pattern": "^https?://copilot-proxy\\.githubusercontent\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "AI domains (.ai)",
+          "pattern": "^https?://[^/]*\\.ai($|/)",
           "active": true
         }
       ],
