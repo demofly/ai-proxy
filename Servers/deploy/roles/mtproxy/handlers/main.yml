@@ -1,0 +1,28 @@
+---
+- name: Reload systemd for mtg
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart mtg
+  ansible.builtin.systemd:
+    name: mtg
+    state: restarted
+
+# Co-deployment: nginx restart запрещён (Matrix HTTP на 127.0.0.1:8443 —
+# при restart старый процесс не успевает отпустить порт → bind() failed).
+# Только reload. reset-failed очищает stale job markers от предыдущих попыток.
+
+- name: Reload nginx for mtproxy
+  ansible.builtin.shell: |
+    systemctl reset-failed nginx 2>/dev/null || true
+    if systemctl is-active --quiet nginx; then
+      systemctl reload nginx
+    else
+      systemctl start nginx
+    fi
+  changed_when: true
+
+- name: Restart nftables
+  ansible.builtin.systemd:
+    name: nftables
+    state: restarted

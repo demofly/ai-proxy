@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# Squid: SNI routing entry (upstream nodes)
+# Access Squid connects with TLS, tls-domain={{ squid_tls_sni }}
+
+{{ squid_tls_sni }}  squid_tls_term;

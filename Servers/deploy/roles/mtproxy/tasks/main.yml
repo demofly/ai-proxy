@@ -1,0 +1,380 @@
+---
+
+# ===========================================================================
+# Phase: nginx stream infrastructure (upstream nodes, co-deployment safe)
+# SNI router on port 443 shared with Matrix and other projects.
+# MTProxy adds its own TLS terminator behind the SNI router.
+# ===========================================================================
+
+- name: Install nginx with stream module support (upstream)
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - libnginx-mod-stream
+    state: present
+    update_cache: true
+  register: nginx_installed
+
+# Fresh install: apt auto-starts nginx with default config.
+# Stop it — we deploy full config first, then start with correct config.
+# Co-deployment: restart is forbidden (port race with Matrix on 8443),
+# so nginx must start with final config from the beginning.
+- name: Stop nginx after fresh install (config not ready yet)
+  ansible.builtin.systemd:
+    name: nginx
+    state: stopped
+  when: nginx_installed.changed
+
+- name: Create nginx stream.d directory (upstream)
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create SNI map fragment directory (upstream)
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/sni-map.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Unified stream block (same marker across all co-deployed projects)
+- name: Ensure stream block exists in nginx.conf (upstream)
+  ansible.builtin.blockinfile:
+    path: /etc/nginx/nginx.conf
+    marker: "# {mark} ANSIBLE MANAGED - nginx stream block"
+    insertafter: EOF
+    block: |
+      stream {
+          include /etc/nginx/stream.d/*.conf;
+      }
+  notify: Reload nginx for mtproxy
+
+# Shared SNI router: created once by first deployer, never overwritten
+- name: Deploy shared SNI router (first deployer wins)
+  ansible.builtin.template:
+    src: 00-sni-router.conf.j2
+    dest: /etc/nginx/stream.d/00-sni-router.conf
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  notify: Reload nginx for mtproxy
+
+# Migration: force-update SNI router to add proxy_protocol on
+# (force: false above won't update existing deployments)
+- name: "Migration: update SNI router with proxy_protocol support"
+  ansible.builtin.template:
+    src: 00-sni-router.conf.j2
+    dest: /etc/nginx/stream.d/00-sni-router.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx for mtproxy
+
+# ===========================================================================
+# TLS certificate for access → upstream transit encryption
+# ===========================================================================
+
+- name: Create nginx SSL directory
+  ansible.builtin.file:
+    path: /etc/nginx/ssl
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Generate self-signed TLS certificate for MTProxy transit
+  ansible.builtin.command:
+    cmd: >
+      openssl req -x509
+      -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
+      -keyout /etc/nginx/ssl/mtproxy.key
+      -out /etc/nginx/ssl/mtproxy.crt
+      -days 3650 -nodes
+      -subj '/CN=mtproxy-transit'
+  args:
+    creates: /etc/nginx/ssl/mtproxy.crt
+
+- name: Set permissions on TLS key
+  ansible.builtin.file:
+    path: /etc/nginx/ssl/mtproxy.key
+    owner: root
+    group: root
+    mode: '0600'
+
+# ===========================================================================
+# Deploy MTProxy stream configs (co-deployment: own upstream + SNI entry)
+# ===========================================================================
+
+# Migration: remove old monolithic config (pre co-deployment era)
+- name: "Migration: remove old mtproxy-tls.conf"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/mtproxy-tls.conf
+    state: absent
+  notify: Reload nginx for mtproxy
+
+# Migration: remove access-side config that was incorrectly deployed to upstream
+# (conflicts with Matrix HTTP on port 8443)
+- name: "Migration: remove stale 10-aiproxy-upstreams.conf from upstream"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/10-aiproxy-upstreams.conf
+    state: absent
+  notify: Reload nginx for mtproxy
+
+- name: "Migration: remove stale aiproxy SNI map from upstream"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/sni-map.d/aiproxy.conf
+    state: absent
+  notify: Reload nginx for mtproxy
+
+# Migration: Squid moved to dedicated port (bypasses nginx entirely)
+# Remove Squid TLS terminator and SNI map that are no longer needed
+- name: "Migration: remove Squid TLS terminator (Squid now on dedicated port)"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/10-squid-tls-term.conf
+    state: absent
+  notify: Reload nginx for mtproxy
+
+- name: "Migration: remove Squid SNI map entry"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/sni-map.d/squid.conf
+    state: absent
+  notify: Reload nginx for mtproxy
+
+# Удаление дефолтного nginx сайта на порту 80 (Squid теперь слушает на :80)
+- name: "Migration: disable nginx default site (port 80 used by Squid)"
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx for mtproxy
+
+- name: Deploy MTProxy TLS terminator config (stream)
+  ansible.builtin.template:
+    src: nginx-mtproxy-stream.conf.j2
+    dest: /etc/nginx/stream.d/10-mtproxy-tls.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx for mtproxy
+
+- name: Deploy MTProxy SNI map entry
+  ansible.builtin.template:
+    src: sni-map.d/mtproxy.conf.j2
+    dest: /etc/nginx/stream.d/sni-map.d/mtproxy.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx for mtproxy
+
+# Squid TLS termination removed — Squid now listens on dedicated port
+# (bypasses nginx entirely, no TLS wrapping needed for cache_peer chain)
+
+# Apply nginx config before starting mtg
+- name: Flush nginx handlers before starting mtg
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start nginx (upstream)
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: true
+
+# ===========================================================================
+# Phase: mtg daemon
+# ===========================================================================
+
+- name: Create mtproxy system user
+  ansible.builtin.user:
+    name: mtproxy
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Determine system architecture for mtg download
+  ansible.builtin.set_fact:
+    mtg_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+- name: Check if mtg binary exists
+  ansible.builtin.stat:
+    path: /usr/local/bin/mtg
+  register: mtg_binary
+
+- name: Download and install mtg
+  when: not mtg_binary.stat.exists
+  block:
+    - name: Download mtg archive
+      ansible.builtin.get_url:
+        url: "https://github.com/9seconds/mtg/releases/download/v{{ mtproxy_version }}/mtg-{{ mtproxy_version }}-linux-{{ mtg_arch }}.tar.gz"
+        dest: "/tmp/mtg-{{ mtproxy_version }}.tar.gz"
+        mode: "0644"
+
+    - name: Create temp directory for mtg extraction
+      ansible.builtin.file:
+        path: /tmp/mtg-extract
+        state: directory
+        mode: "0755"
+
+    - name: Extract mtg archive
+      ansible.builtin.unarchive:
+        src: "/tmp/mtg-{{ mtproxy_version }}.tar.gz"
+        dest: /tmp/mtg-extract
+        remote_src: true
+
+    - name: Find mtg binary in extracted files
+      ansible.builtin.shell:
+        cmd: find /tmp/mtg-extract -name 'mtg' -type f -o -name 'mtg-*-linux-*' -type f | head -1
+      register: mtg_found_binary
+      changed_when: false
+      failed_when: mtg_found_binary.stdout == ""
+
+    - name: Copy mtg binary to /usr/local/bin
+      ansible.builtin.copy:
+        src: "{{ mtg_found_binary.stdout }}"
+        dest: /usr/local/bin/mtg
+        owner: root
+        group: root
+        mode: "0755"
+        remote_src: true
+
+    - name: Clean up temp files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/mtg-extract
+        - "/tmp/mtg-{{ mtproxy_version }}.tar.gz"
+
+- name: Create mtproxy config directory
+  ansible.builtin.file:
+    path: /etc/mtproxy
+    state: directory
+    owner: mtproxy
+    group: mtproxy
+    mode: "0750"
+
+# Генерация секрета при первом деплое (если не задан вручную)
+# Проверяем mtg.toml (v2) и mtg.env (legacy) для обратной совместимости
+- name: Check if mtg config already exists (TOML)
+  ansible.builtin.stat:
+    path: /etc/mtproxy/mtg.toml
+  register: mtg_toml_file
+
+- name: Check if legacy mtg.env exists (migration from v1 format)
+  ansible.builtin.stat:
+    path: /etc/mtproxy/mtg.env
+  register: mtg_env_file
+
+- name: Generate mtg secret if not provided
+  ansible.builtin.command:
+    cmd: /usr/local/bin/mtg generate-secret --hex {{ mtproxy_fake_tls_domain }}
+  register: mtg_generated_secret
+  when:
+    - mtproxy_secret == ""
+    - not mtg_toml_file.stat.exists
+    - not mtg_env_file.stat.exists
+  changed_when: false
+  no_log: true
+
+- name: Read existing secret from TOML config
+  ansible.builtin.shell:
+    cmd: grep '^secret' /etc/mtproxy/mtg.toml | sed 's/.*"\(.*\)"/\1/'
+  register: mtg_existing_secret_toml
+  when:
+    - mtproxy_secret == ""
+    - mtg_toml_file.stat.exists
+  changed_when: false
+  no_log: true
+
+- name: Read existing secret from legacy env file
+  ansible.builtin.shell:
+    cmd: grep '^MTG_SECRET=' /etc/mtproxy/mtg.env | cut -d= -f2
+  register: mtg_existing_secret_env
+  when:
+    - mtproxy_secret == ""
+    - not mtg_toml_file.stat.exists
+    - mtg_env_file.stat.exists
+  changed_when: false
+  no_log: true
+
+- name: Set mtproxy_secret fact
+  no_log: true
+  ansible.builtin.set_fact:
+    mtproxy_secret_resolved: >-
+      {%- if mtproxy_secret != "" -%}
+        {{ mtproxy_secret }}
+      {%- elif mtg_toml_file.stat.exists -%}
+        {{ mtg_existing_secret_toml.stdout }}
+      {%- elif mtg_env_file.stat.exists -%}
+        {{ mtg_existing_secret_env.stdout }}
+      {%- else -%}
+        {{ mtg_generated_secret.stdout }}
+      {%- endif -%}
+
+- name: Deploy mtg TOML config (v2 format)
+  ansible.builtin.template:
+    src: mtg.toml.j2
+    dest: /etc/mtproxy/mtg.toml
+    owner: mtproxy
+    group: mtproxy
+    mode: "0640"
+  notify: Restart mtg
+
+- name: Remove legacy mtg.env if migrated to TOML
+  ansible.builtin.file:
+    path: /etc/mtproxy/mtg.env
+    state: absent
+  when: mtg_env_file.stat.exists | default(false)
+
+- name: Deploy mtproxy users file
+  ansible.builtin.template:
+    src: users.txt.j2
+    dest: /etc/mtproxy/users.txt
+    owner: mtproxy
+    group: mtproxy
+    mode: "0640"
+
+- name: Deploy mtg systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/mtg.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=MTProxy (mtg) for Telegram
+      After=network.target nginx.service
+
+      [Service]
+      Type=simple
+      User=mtproxy
+      Group=mtproxy
+      ExecStart=/usr/local/bin/mtg run /etc/mtproxy/mtg.toml
+      Restart=on-failure
+      RestartSec=5
+      MemoryMax=64M
+      LimitNOFILE=4096
+
+      [Install]
+      WantedBy=multi-user.target
+  notify:
+    - Reload systemd for mtg
+    - Restart mtg
+
+- name: Reload systemd after mtg unit deploy
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enable and start mtg
+  ansible.builtin.systemd:
+    name: mtg
+    state: started
+    enabled: true
+
+# ===========================================================================
+# Firewall для MTProxy
+# ===========================================================================
+# Правила файрвола для MTProxy (порт 443) консолидированы в playbook.yml
+# (секция "Phase: Firewall") для корректного порядка выполнения:
+# миграция Squid-правил → добавление MTProxy-правил.

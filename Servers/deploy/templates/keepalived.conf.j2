@@ -8,9 +8,11 @@ global_defs {
     enable_script_security
 }
 
-# Проверка доступности Squid
+# Проверка доступности Squid с автоперезапуском
+# Скрипт: killall -0 squid (проверка) → systemctl restart squid (при падении)
+# Cooldown {{ keepalived_restart_cooldown | default(30) }}s между попытками рестарта
 vrrp_script check_squid {
-    script "/usr/bin/killall -0 squid"
+    script "/etc/keepalived/check_and_restart_squid.sh"
     interval 2
     weight -20
     fall 3
@@ -28,7 +30,7 @@ vrrp_instance VI_SQUID {
 
     authentication {
         auth_type PASS
-        auth_pass {{ keepalived_auth_pass | default('AiPr0xy2024') }}
+        auth_pass {{ keepalived_auth_pass | default('ExAmPlEpAsS') }}
     }
 
     virtual_ipaddress {

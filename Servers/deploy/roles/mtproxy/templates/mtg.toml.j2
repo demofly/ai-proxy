@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# mtg v2 configuration (TOML)
+# Docs: https://github.com/9seconds/mtg
+
+secret = "{{ mtproxy_secret_resolved }}"
+bind-to = "127.0.0.1:{{ mtproxy_local_port }}"
+
+{% if mtproxy_fake_tls_domain is defined and mtproxy_fake_tls_domain != "" %}
+# Fake-TLS для обхода DPI (маскировка под TLS к популярному домену)
+fake-tls = "{{ mtproxy_fake_tls_domain }}"
+{% endif %}

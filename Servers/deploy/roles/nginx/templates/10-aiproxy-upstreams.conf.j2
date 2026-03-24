@@ -1,0 +1,36 @@
+# {{ ansible_managed }}
+# ai-assistants-proxy: upstream definitions (stream context)
+
+# Real upstream backends (nginx SNI router on port 443)
+upstream aiproxy_mtproxy_backends {
+{% for host in groups['upstreams'] %}
+    server {{ hostvars[host]['ansible_host'] }}:443; # {{ host }}
+{% endfor %}
+}
+
+# SNI map target: local TLS relay (proxy_ssl wraps transit in TLS 1.3)
+upstream aiproxy_mtproxy {
+    server 127.0.0.1:{{ mtproxy_relay_port | default(9443) }};
+}
+
+# TLS 1.3 relay: wraps client stream in TLS for access → upstream transit
+# Sets proxy_ssl_name so upstream SNI router can match and route to mtg
+server {
+    listen 127.0.0.1:{{ mtproxy_relay_port | default(9443) }} proxy_protocol;
+
+    proxy_pass aiproxy_mtproxy_backends;
+
+    # TLS 1.3 to upstream nginx SNI router
+    proxy_ssl on;
+    proxy_ssl_protocols TLSv1.3;
+    proxy_ssl_server_name on;
+    proxy_ssl_name {{ mtproxy_hostname | default(mtproxy_fake_tls_domain | default('cloudflare.com')) }};
+    proxy_ssl_verify off;  # self-signed certs on upstream nodes
+
+    # Timeouts: 60s idle for MTProxy (Telegram has its own keepalive)
+    proxy_connect_timeout 10s;
+    proxy_timeout 60s;
+
+    # TCP keepalive: detect dead peers via kernel probes
+    proxy_socket_keepalive on;
+}

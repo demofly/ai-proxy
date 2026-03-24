@@ -23,6 +23,19 @@ table inet filter {
         ip saddr {{ hostvars[host]['ansible_host'] }} tcp dport {{ squid_port }} accept
 {% endfor %}
 
+        # Allow DNS (unbound) from access proxies
+{% for host in groups['access_proxies'] %}
+        ip saddr {{ hostvars[host]['ansible_host'] }} tcp dport 53 accept
+        ip saddr {{ hostvars[host]['ansible_host'] }} udp dport 53 accept
+{% endfor %}
+
+{% if mtproxy_enabled | default(false) | bool %}
+        # Allow MTProxy TLS (nginx on 443) from access proxies
+{% for host in groups['access_proxies'] %}
+        ip saddr {{ hostvars[host]['ansible_host'] }} tcp dport 443 accept
+{% endfor %}
+{% endif %}
+
         # Allow ICMP ping
         icmp type echo-request accept
         icmpv6 type echo-request accept

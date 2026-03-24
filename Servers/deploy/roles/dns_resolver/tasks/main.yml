@@ -1,0 +1,140 @@
+---
+# Роль: dns_resolver — кеширующий DNS-резолвер (unbound)
+#
+# Архитектура:
+#   upstream — резолвит через публичные DNS (dns_servers из inventory)
+#   access   — резолвит ТОЛЬКО через unbound на upstream-нодах
+#
+# Зависимости: dns-root-data (Debian) для DNSSEC trust anchor
+
+- name: Calculate unbound resource limits
+  ansible.builtin.set_fact:
+    _dns_threads: "{{ dns_resolver_threads | default([ansible_processor_vcpus | default(1), 1] | max) }}"
+    _dns_cache_mb: "{{ dns_resolver_cache_mb | default([(ansible_memtotal_mb | default(2048) / 32) | int, 16] | max) }}"
+
+- name: Install unbound (Debian family)
+  ansible.builtin.apt:
+    name:
+      - unbound
+      - dns-root-data
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: Install unbound (RHEL family)
+  ansible.builtin.dnf:
+    name:
+      - unbound
+    state: present
+  when: ansible_os_family == 'RedHat'
+
+# DNSSEC root trust anchor — /var/lib/unbound/ writable для unbound
+- name: Ensure /var/lib/unbound directory exists
+  ansible.builtin.file:
+    path: /var/lib/unbound
+    state: directory
+    owner: unbound
+    group: unbound
+    mode: '0755'
+
+- name: Initialize DNSSEC root trust anchor
+  ansible.builtin.command: unbound-anchor -a /var/lib/unbound/root.key
+  args:
+    creates: /var/lib/unbound/root.key
+  register: _anchor_result
+  # unbound-anchor returns 1 when it updates the key (normal), 0 when unchanged
+  failed_when: _anchor_result.rc not in [0, 1]
+
+- name: Fix root.key ownership
+  ansible.builtin.file:
+    path: /var/lib/unbound/root.key
+    owner: unbound
+    group: unbound
+    mode: '0644'
+
+# Определяем upstream DNS-серверы в зависимости от роли
+# access → unbound на upstream-нодах; upstream → публичные DNS из inventory
+- name: Set upstream forwarders (access → upstream unbound instances)
+  ansible.builtin.set_fact:
+    _dns_forwarders: >-
+      {{ groups['upstreams'] | map('extract', hostvars, 'ansible_host') | list }}
+  when: proxy_role == 'access'
+
+- name: Set upstream forwarders (upstream → public DNS)
+  ansible.builtin.set_fact:
+    _dns_forwarders: "{{ dns_servers | default(['9.9.9.9', '8.8.8.8', '1.1.1.1']) }}"
+  when: proxy_role == 'upstream'
+
+- name: Deploy unbound config
+  ansible.builtin.template:
+    src: unbound.conf.j2
+    dest: /etc/unbound/unbound.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'unbound-checkconf %s'
+  notify: Restart unbound
+
+# Firewall: DNS-правила для upstream управляются в основном playbook
+# (nftables-upstream.conf.j2 / iptables / ufw)
+
+# Отключаем systemd-resolved если он занимает порт 53
+- name: Check if systemd-resolved is active
+  ansible.builtin.command: systemctl is-active systemd-resolved
+  register: _resolved_status
+  changed_when: false
+  failed_when: false
+
+- name: Disable systemd-resolved stub listener
+  when: _resolved_status.stdout == 'active'
+  block:
+    - name: Create resolved.conf.d directory
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Disable DNSStubListener
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/no-stub.conf
+        content: |
+          [Resolve]
+          DNSStubListener=no
+        owner: root
+        group: root
+        mode: '0644'
+      register: _stub_disabled
+
+    - name: Restart systemd-resolved to release port 53
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
+      when: _stub_disabled.changed
+
+    - name: Ensure /etc/resolv.conf points to localhost
+      ansible.builtin.copy:
+        dest: /etc/resolv.conf
+        content: |
+          # Managed by Ansible (dns_resolver role)
+          nameserver 127.0.0.1
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: Set /etc/resolv.conf to localhost (no systemd-resolved)
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      # Managed by Ansible (dns_resolver role)
+      nameserver 127.0.0.1
+    owner: root
+    group: root
+    mode: '0644'
+  when: _resolved_status.stdout != 'active'
+
+- name: Enable and start unbound
+  ansible.builtin.systemd:
+    name: unbound
+    enabled: true
+    state: started

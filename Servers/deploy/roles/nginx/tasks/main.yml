@@ -1,0 +1,215 @@
+# AI-GENERATED — NOT REVIEWED
+---
+# nginx role for ai-assistants-proxy: SNI routing for MTProxy + Squid
+#
+# Architecture: modular stream co-deployment.
+# Each project deploys its own SNI map entries and upstreams.
+# Shared infrastructure (00-sni-router.conf) created once by first deployer.
+
+# ===========================================================================
+# Install nginx
+# ===========================================================================
+
+- name: Install nginx with stream module support
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - libnginx-mod-stream
+    state: present
+    update_cache: true
+  register: nginx_installed
+
+# Fresh install: apt auto-starts nginx with default config (port 80 only).
+# Stop it — we deploy full config first, then start after Squid releases 443.
+# Without this, flush_handlers or Reload would try to start nginx on 443
+# while Squid is still listening there.
+- name: Stop nginx after fresh install (config not ready yet)
+  ansible.builtin.systemd:
+    name: nginx
+    state: stopped
+  when: nginx_installed.changed
+
+# ===========================================================================
+# Shared stream infrastructure (co-deployment safe)
+# ===========================================================================
+
+- name: Create nginx stream.d directory
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create SNI map fragment directory
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/sni-map.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Migration: remove old blockinfile marker (pre-modular era)
+- name: "Migration: remove old stream block marker from nginx.conf"
+  ansible.builtin.blockinfile:
+    path: /etc/nginx/nginx.conf
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - stream module"
+    state: absent
+
+# Unified stream block (same marker across all co-deployed projects)
+- name: Ensure stream block exists in nginx.conf
+  ansible.builtin.blockinfile:
+    path: /etc/nginx/nginx.conf
+    marker: "# {mark} ANSIBLE MANAGED - nginx stream block"
+    insertafter: EOF
+    block: |
+      stream {
+          include /etc/nginx/stream.d/*.conf;
+      }
+  notify: Reload nginx
+
+# Shared SNI router: created once by first deployer, never overwritten
+- name: Deploy shared SNI router (first deployer wins)
+  ansible.builtin.template:
+    src: 00-sni-router.conf.j2
+    dest: /etc/nginx/stream.d/00-sni-router.conf
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+  notify: Reload nginx
+
+# Migration: force-update SNI router to add proxy_protocol on
+# (force: false above won't update existing deployments)
+- name: "Migration: update SNI router with proxy_protocol support"
+  ansible.builtin.template:
+    src: 00-sni-router.conf.j2
+    dest: /etc/nginx/stream.d/00-sni-router.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx
+
+# ===========================================================================
+# Migration: remove old monolithic config
+# ===========================================================================
+
+- name: "Migration: remove old monolithic stream config"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/mtproxy-squid.conf
+    state: absent
+  notify: Reload nginx
+
+# ===========================================================================
+# Deploy project-specific stream configs
+# ===========================================================================
+
+- name: Deploy ai-proxy upstream definitions
+  ansible.builtin.template:
+    src: 10-aiproxy-upstreams.conf.j2
+    dest: /etc/nginx/stream.d/10-aiproxy-upstreams.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx
+
+- name: Deploy ai-proxy SNI map entries
+  ansible.builtin.template:
+    src: sni-map.d/aiproxy.conf.j2
+    dest: /etc/nginx/stream.d/sni-map.d/aiproxy.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload nginx
+
+# ===========================================================================
+# Squid reconfiguration with rollback (access nodes only)
+# Nginx is stopped after fresh install (or already running on subsequent deploys).
+# The block below reconfigures Squid, releases port 443, and starts nginx.
+# Pending Reload handlers fire at end of play (harmless refresh).
+# ===========================================================================
+
+- name: Deploy nginx and reconfigure squid with rollback
+  when: proxy_role == 'access'
+  block:
+    - name: Backup squid configuration
+      ansible.builtin.copy:
+        src: /etc/squid/squid.conf
+        dest: /etc/squid/squid.conf.nginx-rollback
+        remote_src: true
+        mode: '0644'
+
+    - name: Deploy Squid config (behind nginx on localhost)
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/templates/squid-access.conf.j2"
+        dest: "{{ squid_config_path | default('/etc/squid/squid.conf') }}"
+        owner: root
+        group: root
+        mode: '0644'
+        validate: 'squid -k parse -f %s'
+      register: _squid_config_deployed
+
+    - name: Test nginx configuration
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+
+    - name: Check if squid is listening on port 443
+      ansible.builtin.shell:
+        cmd: ss -tlnp 'sport = :443' | grep -q squid
+      register: _squid_on_443
+      failed_when: false
+      changed_when: false
+
+    - name: Restart squid to release port 443
+      ansible.builtin.systemd:
+        name: squid
+        state: restarted
+      when: _squid_on_443.rc == 0
+
+    # Reload Squid при изменении конфига (cache_peer, ACL, headers и т.д.)
+    # без необходимости полного restart (порт не менялся)
+    - name: Reconfigure squid after config change
+      ansible.builtin.command: squid -k reconfigure
+      when:
+        - _squid_config_deployed.changed | default(false)
+        - _squid_on_443.rc != 0
+
+    - name: Enable and start nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Verify nginx is listening on port 443
+      ansible.builtin.wait_for:
+        port: 443
+        timeout: 10
+
+  rescue:
+    - name: Rollback - restore squid configuration
+      ansible.builtin.copy:
+        src: /etc/squid/squid.conf.nginx-rollback
+        dest: /etc/squid/squid.conf
+        remote_src: true
+        mode: '0644'
+
+    - name: Rollback - restart squid
+      ansible.builtin.systemd:
+        name: squid
+        state: restarted
+
+    - name: Fail deployment with rollback notification
+      ansible.builtin.fail:
+        msg: "nginx deployment failed, squid rolled back to port 443"
+
+# ===========================================================================
+# Enable and start nginx (upstream nodes)
+# ===========================================================================
+
+- name: Enable and start nginx (upstream nodes)
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: true
+  when: proxy_role != 'access'

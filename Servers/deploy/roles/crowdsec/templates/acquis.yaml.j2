@@ -1,0 +1,26 @@
+# {{ ansible_managed }}
+# CrowdSec log acquisition — sources for attack detection
+
+{% if proxy_role == 'access' and enable_logging | default(false) %}
+# Squid access logs — HTTP attacks, scanners, brute-force, CVE exploitation
+# Только для access-прокси с включённым логированием
+filenames:
+  - /var/log/squid/access.log
+labels:
+  type: squid
+---
+{% endif %}
+
+# System auth — SSH brute-force, invalid users
+filenames:
+  - /var/log/auth.log
+labels:
+  type: syslog
+---
+
+# journald — sshd via systemd (дублирование для надёжности)
+source: journalctl
+journalctl_filter:
+  - "_SYSTEMD_UNIT=ssh.service"
+labels:
+  type: syslog

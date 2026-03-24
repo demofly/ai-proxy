@@ -1,0 +1,17 @@
+#!/usr/sbin/nft -f
+# {{ ansible_managed }}
+# Firewall rules for MTProxy (upstream nodes)
+
+table inet mtproxy {
+    chain input {
+        type filter hook input priority 0; policy accept;
+
+        # Allow MTProxy from access proxies
+{% for host in groups['access_proxies'] %}
+        ip saddr {{ hostvars[host]['ansible_host'] }} tcp dport 443 accept comment "MTProxy from {{ host }}"
+{% endfor %}
+
+        # Drop all other traffic to MTProxy port
+        tcp dport 443 drop comment "MTProxy - drop unauthorized"
+    }
+}

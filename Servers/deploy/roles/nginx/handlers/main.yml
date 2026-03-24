@@ -1,0 +1,20 @@
+# AI-GENERATED — NOT REVIEWED
+---
+# reset-failed clears stale job markers from prior failed restart/reload
+# attempts (co-deployment race conditions with Matrix nginx)
+
+- name: Reload nginx
+  ansible.builtin.shell: |
+    systemctl reset-failed nginx 2>/dev/null || true
+    if systemctl is-active --quiet nginx; then
+      systemctl reload nginx
+    else
+      systemctl start nginx
+    fi
+  changed_when: true
+
+- name: Restart nginx
+  ansible.builtin.shell: |
+    systemctl reset-failed nginx 2>/dev/null || true
+    systemctl restart nginx
+  changed_when: true

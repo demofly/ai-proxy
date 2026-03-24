@@ -30,7 +30,8 @@ cache_log /dev/null
 acl access_proxy src {{ hostvars[host]['ansible_host'] }}
 {% endfor %}
 
-# Порт
+# Порт — Squid слушает напрямую (не за nginx)
+# nginx:443 используется только для MTProxy SNI routing
 http_port {{ squid_port }}
 
 # Правила доступа
@@ -45,6 +46,10 @@ request_header_access X-Forwarded-For deny all
 request_header_access Via deny all
 request_header_access X-Real-IP deny all
 
+# Подмена User-Agent на фиксированную строку
+request_header_access User-Agent deny all
+request_header_replace User-Agent "Mozilla/5.0 (X11; {{ ansible_distribution }}; {{ ansible_system }} {{ ansible_architecture }}; rv:144.0) Gecko/20100101 Firefox/144.0"
+
 reply_header_access Via deny all
 reply_header_access X-Cache deny all
 
@@ -55,9 +60,10 @@ reply_header_access X-Cache deny all
 # Общий лимит памяти Squid: {{ max_memory_mb }} MB (20% от {{ total_ram_mb }} MB)
 memory_pools_limit {{ max_memory_mb }} MB
 
-# Таймауты (уменьшены для транзитного прокси)
+# Таймауты
 connect_timeout 15 seconds
-read_timeout 30 seconds
+# read_timeout — время ожидания данных от AI API (может «думать» 10+ минут)
+read_timeout {{ read_timeout | default('15 minutes') }}
 request_timeout 30 seconds
 shutdown_lifetime 3 seconds
 
@@ -83,8 +89,7 @@ quick_abort_pct 100
 icp_port 0
 
 # DNS
-dns_nameservers {{ dns_servers | join(' ') }}
-dns_v4_first on
+dns_nameservers 127.0.0.1
 dns_retransmit_interval 2 seconds
 dns_timeout 15 seconds
 positive_dns_ttl 6 hours

@@ -1,0 +1,101 @@
+# {{ ansible_managed }}
+# Unbound caching DNS resolver — {{ proxy_role }} node
+#
+# Роль {{ proxy_role }}:
+{% if proxy_role == 'access' %}
+#   Форвардит запросы ТОЛЬКО на unbound upstream-нод (не в публичный интернет)
+{% else %}
+#   Форвардит запросы на публичные DNS-серверы через DNS-over-TLS
+{% endif %}
+
+server:
+    # Слушаем только localhost — внешний доступ не нужен
+{% if proxy_role == 'upstream' %}
+    # + адрес хоста для приёма запросов от access-нод
+    interface: 127.0.0.1
+    interface: {{ ansible_host }}
+{% else %}
+    interface: 127.0.0.1
+{% endif %}
+    port: {{ dns_resolver_port | default(53) }}
+
+    # Доступ: localhost всегда, access-ноды — только на upstream
+    access-control: 127.0.0.0/8 allow
+{% if proxy_role == 'upstream' %}
+{% for host in groups['access_proxies'] %}
+    access-control: {{ hostvars[host]['ansible_host'] }}/32 allow
+{% endfor %}
+{% endif %}
+    access-control: 0.0.0.0/0 refuse
+
+    # Производительность: потоки по числу ядер
+    num-threads: {{ _dns_threads }}
+
+    # Кеш: размер привязан к RAM (1/32 от общего объёма, мин 16 МБ)
+    msg-cache-size: {{ _dns_cache_mb }}m
+    rrset-cache-size: {{ (_dns_cache_mb | int * 2) }}m
+    key-cache-size: {{ _dns_cache_mb }}m
+
+    # Slabs = ближайшая степень 2 от числа потоков (для lock-free доступа)
+    msg-cache-slabs: {{ _dns_threads }}
+    rrset-cache-slabs: {{ _dns_threads }}
+    key-cache-slabs: {{ _dns_threads }}
+    infra-cache-slabs: {{ _dns_threads }}
+
+    # TTL-лимиты
+    cache-min-ttl: {{ dns_resolver_min_ttl | default(300) }}
+    cache-max-ttl: {{ dns_resolver_max_ttl | default(86400) }}
+    cache-max-negative-ttl: {{ dns_resolver_neg_ttl | default(10) }}
+    # Не кешировать SERVFAIL от upstream (быстрое восстановление)
+    serve-expired: yes
+    serve-expired-ttl: 30
+
+    # Prefetch: обновлять популярные записи до истечения TTL
+{% if dns_resolver_prefetch | default(true) %}
+    prefetch: yes
+    prefetch-key: yes
+{% endif %}
+
+    # Безопасность
+    hide-identity: yes
+    hide-version: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    # harden-referral-path вызывает ложные SERVFAIL в forwarding mode
+    # (unbound не может проверить referral path через forwarder)
+    harden-referral-path: no
+    use-caps-for-id: yes
+
+    # DNSSEC (root.key в /var/lib/unbound/ — writable для unbound)
+{% if dns_resolver_dnssec | default(true) %}
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+{% endif %}
+
+    # Оптимизации
+    so-reuseport: yes
+    so-rcvbuf: 4m
+    so-sndbuf: 4m
+    edns-buffer-size: 1232
+    minimal-responses: yes
+
+    # Логирование: только ошибки
+    verbosity: 1
+    logfile: ""
+    use-syslog: yes
+    log-queries: no
+    log-replies: no
+
+# Форвардинг — все запросы через upstream DNS
+forward-zone:
+    name: "."
+{% if proxy_role == 'upstream' %}
+    # Публичные DNS-резолверы (plain DNS, порт 53)
+    forward-addr: 9.9.9.9
+    forward-addr: 8.8.8.8
+    forward-addr: 1.1.1.1
+{% else %}
+    # Access: форвардинг на unbound upstream-нод (plain DNS)
+{% for server in _dns_forwarders %}
+    forward-addr: {{ server }}
+{% endfor %}
+{% endif %}

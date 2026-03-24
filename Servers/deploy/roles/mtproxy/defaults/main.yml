@@ -1,0 +1,28 @@
+---
+# Включение/отключение MTProxy
+mtproxy_enabled: false
+
+# Версия mtg (github.com/9seconds/mtg)
+mtproxy_version: "2.1.8"
+
+# Локальный порт mtg daemon (behind nginx TLS on 127.0.0.1)
+mtproxy_local_port: 2083
+
+# Секрет mtg (hex). Пустая строка = автогенерация при первом деплое
+mtproxy_secret: ""
+
+# Публичный домен для MTProxy (для SNI-роутинга). Пустая строка = только по fake-TLS домену
+mtproxy_hostname: ""
+
+# Порт локального TLS-терминатора на upstream (SNI router → TLS term → mtg)
+mtproxy_tls_port: 4443
+
+# Порт TLS relay на access nodes (SNI router → relay → TLS 1.3 → upstream)
+mtproxy_relay_port: 9443
+
+# Реестр пользователей (для администратора)
+mtproxy_users:
+  - name: "Initial User"
+    telegram: "@admin"
+    granted: "{{ ansible_date_time.date }}"
+    note: "Default user"

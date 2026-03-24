@@ -1,0 +1,36 @@
+# {{ ansible_managed }}
+# Squid TLS 1.3 termination for access → upstream transit (stream context)
+#
+# Architecture: SNI router on port 443 (shared with MTProxy/other projects)
+# routes Squid TLS traffic (SNI={{ squid_tls_sni }}) to this local TLS terminator.
+# TLS is terminated here; decrypted HTTP CONNECT forwarded to upstream Squid.
+#
+# PROXY protocol chain:
+#   SNI router (proxy_protocol on) → TLS terminator (listen proxy_protocol)
+#   → TLS terminator (proxy_protocol on) → Squid (require-proxy-header)
+#   nginx forwards PP-parsed src_addr, preserving the original access node IP.
+
+upstream squid_tls_term {
+    server 127.0.0.1:{{ squid_tls_term_port | default(4444) }};
+}
+
+server {
+    listen 127.0.0.1:{{ squid_tls_term_port | default(4444) }} ssl proxy_protocol;
+
+    ssl_certificate     /etc/nginx/ssl/mtproxy.crt;
+    ssl_certificate_key /etc/nginx/ssl/mtproxy.key;
+    ssl_protocols       TLSv1.3;
+
+    proxy_pass 127.0.0.1:{{ squid_local_port | default(3128) }};
+
+    # Re-inject PROXY protocol for upstream Squid (require-proxy-header)
+    # nginx stream forwards the PP-parsed src_addr (access node IP), not 127.0.0.1
+    proxy_protocol on;
+
+    # Timeouts: 30 min for Squid chain (AI API can "think" up to 30 minutes)
+    proxy_connect_timeout 10s;
+    proxy_timeout 1800s;
+
+    # TCP keepalive: detect dead peers via kernel probes
+    proxy_socket_keepalive on;
+}

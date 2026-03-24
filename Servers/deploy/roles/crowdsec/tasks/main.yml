@@ -1,0 +1,144 @@
+---
+# AI-GENERATED — NOT REVIEWED
+
+# --- CrowdSec repository ---
+
+- name: Create apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download CrowdSec GPG key
+  ansible.builtin.shell:
+    cmd: curl -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | gpg --dearmor -o /etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg
+    creates: /etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg
+
+- name: Add CrowdSec apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/crowdsec_crowdsec.list
+    mode: "0644"
+    content: |
+      deb [signed-by=/etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/any/ any main
+      deb-src [signed-by=/etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/any/ any main
+
+- name: Update apt cache after adding CrowdSec repo
+  ansible.builtin.apt:
+    update_cache: true
+
+# --- Install CrowdSec packages ---
+
+- name: Fix broken dpkg state if previous install failed
+  ansible.builtin.command:
+    cmd: dpkg --configure -a
+  changed_when: false
+  failed_when: false
+
+- name: Install CrowdSec security engine
+  ansible.builtin.apt:
+    name: crowdsec
+    state: present
+  environment:
+    CROWDSEC_PACKAGE_DISABLE_WIZARD: "1"
+
+- name: Install CrowdSec firewall bouncer (nftables)
+  ansible.builtin.apt:
+    name: crowdsec-firewall-bouncer-nftables
+    state: present
+
+# --- Install collections (detection scenarios + parsers) ---
+
+- name: Update CrowdSec hub index
+  ansible.builtin.command:
+    cmd: cscli hub update
+  changed_when: false
+  retries: 3
+  delay: 10
+  register: hub_update
+  until: hub_update.rc == 0
+
+- name: Install CrowdSec collections
+  ansible.builtin.command:
+    cmd: "cscli collections install {{ item }}"
+  loop:
+    - crowdsecurity/linux
+    - crowdsecurity/nginx
+    - crowdsecurity/http-cve
+    - crowdsecurity/whitelist-good-actors
+  register: cscli_install
+  changed_when: "'overwrite' not in cscli_install.stderr and 'already' not in cscli_install.stderr"
+  retries: 3
+  delay: 10
+  until: cscli_install.rc == 0
+
+# --- Whitelist infrastructure IPs (prevent banning our own nodes) ---
+
+- name: Deploy CrowdSec infrastructure whitelist
+  ansible.builtin.template:
+    src: whitelist-infrastructure.yaml.j2
+    dest: /etc/crowdsec/parsers/s02-enrich/whitelist-infrastructure.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart crowdsec
+
+# --- Acquisition config (which logs to monitor) ---
+
+- name: Deploy CrowdSec acquisition config
+  ansible.builtin.template:
+    src: acquis.yaml.j2
+    dest: /etc/crowdsec/acquis.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart crowdsec
+
+# --- Systemd memory limits ---
+
+- name: Create systemd override directory for crowdsec
+  ansible.builtin.file:
+    path: /etc/systemd/system/crowdsec.service.d
+    state: directory
+    mode: "0755"
+
+- name: Deploy systemd memory limit for CrowdSec
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/crowdsec.service.d/memory-limit.conf
+    mode: "0644"
+    content: |
+      [Service]
+      MemoryMax={{ crowdsec_memory_mb | default(200) }}M
+  notify: Restart crowdsec
+
+- name: Create systemd override directory for crowdsec-firewall-bouncer
+  ansible.builtin.file:
+    path: /etc/systemd/system/crowdsec-firewall-bouncer.service.d
+    state: directory
+    mode: "0755"
+
+- name: Deploy systemd memory limit for firewall bouncer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/crowdsec-firewall-bouncer.service.d/memory-limit.conf
+    mode: "0644"
+    content: |
+      [Service]
+      MemoryMax={{ crowdsec_fw_bouncer_memory_mb | default(64) }}M
+  notify: Restart crowdsec-firewall-bouncer
+
+- name: Reload systemd after CrowdSec overrides
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# --- Enable and start services ---
+
+- name: Enable and start CrowdSec
+  ansible.builtin.systemd:
+    name: crowdsec
+    state: started
+    enabled: true
+
+- name: Enable and start CrowdSec firewall bouncer
+  ansible.builtin.systemd:
+    name: crowdsec-firewall-bouncer
+    state: started
+    enabled: true

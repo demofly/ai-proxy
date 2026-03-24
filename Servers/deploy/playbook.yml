@@ -11,6 +11,13 @@
     squid_passwd_path: /etc/squid/passwd
 
   tasks:
+    # Обновление кеша пакетов
+    - name: Update apt cache (Debian family)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == 'Debian'
+
     # Удаление ненужных пакетов
     - name: Remove unnecessary packages (Debian family)
       ansible.builtin.apt:
@@ -39,23 +46,28 @@
         validate: '/usr/sbin/sshd -t -f %s'
       notify: Reload sshd
 
-    # Установка и настройка fail2ban
-    - name: Install fail2ban
+    # Установка базовых утилит
+    # psmisc: killall (используется в keepalived check_and_restart_squid.sh)
+    # bsdutils/util-linux: logger (syslog-уведомления из скриптов keepalived)
+    - name: Install base utilities (Debian family)
       ansible.builtin.package:
-        name: fail2ban
+        name:
+          - mc
+          - haveged
+          - psmisc
+          - bsdutils
         state: present
+      when: ansible_os_family == 'Debian'
 
-    - name: Enable and start fail2ban
-      ansible.builtin.systemd:
-        name: fail2ban
-        enabled: true
-        state: started
-
-    # Установка haveged для генерации энтропии (важно для криптографии на VPS)
-    - name: Install haveged
-      ansible.builtin.package:
-        name: haveged
+    - name: Install base utilities (RHEL family)
+      ansible.builtin.dnf:
+        name:
+          - mc
+          - haveged
+          - psmisc
+          - util-linux
         state: present
+      when: ansible_os_family == 'RedHat'
 
     - name: Enable and start haveged
       ansible.builtin.systemd:
@@ -98,6 +110,9 @@
         mode: '0644'
 
     # Оптимизация сетевых параметров ядра (привязано к CPU и RAM)
+    # NOTE: При co-deployment с Matrix — Matrix common role пропускает конфликтующие
+    # параметры (ai_proxy_present=true) и задаёт только свои уникальные:
+    # vm.swappiness, net.core.rmem_default, net.core.wmem_default
     - name: Configure sysctl for low latency networking
       ansible.posix.sysctl:
         name: "{{ item.name }}"
@@ -138,11 +153,33 @@
         - { name: 'net.ipv4.tcp_max_orphans', value: '{{ fd_limit }}' }
         - { name: 'net.ipv4.tcp_orphan_retries', value: '1' }
 
+    # ===========================================================================
+    # Phase: DNS resolver (unbound caching resolver)
+    # ===========================================================================
+    # ВАЖНО: upstream-ноды деплоятся первыми (они слушают DNS для access-нод)
+    # Порядок: upstreams → access обеспечивается inventory ordering
+
+    - name: Include dns_resolver role
+      ansible.builtin.include_role:
+        name: dns_resolver
+        apply:
+          tags: [dns]
+      tags: [dns]
+
     # Общие задачи для всех прокси
     - name: Install Squid
       ansible.builtin.package:
         name: squid
         state: present
+      register: squid_installed
+
+    # Fresh install: apt auto-starts Squid with default config.
+    # Stop it — we deploy full config first, then start with correct config.
+    - name: Stop Squid after fresh install (config not ready yet)
+      ansible.builtin.systemd:
+        name: squid
+        state: stopped
+      when: squid_installed.changed
 
     # systemd override для Squid - лимиты файловых дескрипторов
     # (limits.conf не работает для systemd сервисов)
@@ -183,12 +220,80 @@
         - /var/spool/squid
         - /var/log/squid
 
+    # Определяем, работает ли nginx с виртуалхостом на порту 443.
+    # Если да — Squid слушает на 127.0.0.1:3128 (nginx терминирует TLS и проксирует).
+    # Ручное переопределение: behind_nginx=true/false в inventory.
+    - name: Detect nginx with active virtual host on port 443
+      ansible.builtin.shell: |
+        set -o pipefail
+        if systemctl is-active --quiet nginx 2>/dev/null && \
+           grep -rqlE 'listen\s+(443|.*:443)\b' /etc/nginx/sites-enabled/ /etc/nginx/stream.d/ /etc/nginx/conf.d/ 2>/dev/null; then
+          echo 'true'
+        else
+          echo 'false'
+        fi
+      args:
+        executable: /bin/bash
+      register: _nginx_443_detect
+      changed_when: false
+      tags: [nginx]
+
+    - name: Set nginx_on_443 fact (auto-detect or manual override)
+      ansible.builtin.set_fact:
+        nginx_on_443: "{{ behind_nginx | default(mtproxy_enabled | default(false) | bool or _nginx_443_detect.stdout | trim | bool) }}"
+      tags: [nginx]
+
+    # ===========================================================================
+    # Phase: Firewall detection (before roles that need it)
+    # ===========================================================================
+
+    - name: Check if ufw is active
+      ansible.builtin.shell: |
+        ufw status 2>/dev/null | grep -q '^Status: active' && echo 'active' || echo 'inactive'
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+
+    # ===========================================================================
+    # Phase: nginx и MTProxy (ПЕРЕД конфигурацией Squid)
+    # nginx/MTProxy должны быть настроены первыми, чтобы освободить порты
+    # для Squid (upstream: nginx освобождает :80; access: nginx занимает :443)
+    # ===========================================================================
+
+    # MTProxy role (upstream): устанавливает nginx, настраивает SNI на :443,
+    # удаляет default site с :80, деплоит mtg daemon
+    - name: Include mtproxy role
+      ansible.builtin.include_role:
+        name: mtproxy
+        apply:
+          tags: [mtproxy]
+      when:
+        - proxy_role == 'upstream'
+        - mtproxy_enabled | default(false) | bool
+      tags: [mtproxy]
+
+    # nginx role (access): устанавливает nginx на :443, переконфигурирует Squid
+    # за nginx (с rollback при ошибке). Деплоит squid-access.conf внутри роли.
+    - name: Include nginx role for SNI routing
+      ansible.builtin.include_role:
+        name: nginx
+        apply:
+          tags: [nginx]
+      when:
+        - proxy_role == 'access'
+        - nginx_on_443 | default(false) | bool
+      tags: [nginx]
+
+    # ===========================================================================
+    # Phase: Squid configuration
+    # ===========================================================================
+
     # Сохраняем критические параметры текущего конфига перед изменением
     # Эти параметры требуют restart при изменении (reload недостаточен)
     - name: Get current critical Squid parameters
       ansible.builtin.shell: |
         set -o pipefail
-        HTTP_PORT=$(grep -E '^http_port\s+' {{ squid_config_path }} 2>/dev/null | awk '{print $2}' || echo 'none')
+        HTTP_PORT=$(grep -E '^http_port\s+' {{ squid_config_path }} 2>/dev/null | head -1 | sed 's/^http_port\s*//' || echo 'none')
         CACHE_DIR=$(grep -E '^cache_dir\s+' {{ squid_config_path }} 2>/dev/null | head -1 | awk '{print $2":"$3":"$4":"$5}' || echo 'none')
         echo "${HTTP_PORT}|${CACHE_DIR}"
       args:
@@ -197,8 +302,9 @@
       changed_when: false
       failed_when: false
 
-    # Конфигурация для access прокси
-    - name: Deploy Squid config (access proxy)
+    # Конфигурация для access прокси (только если MTProxy отключён)
+    # При включённом MTProxy deploy squid config происходит в роли nginx
+    - name: Deploy Squid config (access proxy, without MTProxy)
       ansible.builtin.template:
         src: templates/squid-access.conf.j2
         dest: "{{ squid_config_path }}"
@@ -206,10 +312,11 @@
         group: root
         mode: '0644'
         validate: 'squid -k parse -f %s'
-      when: proxy_role == 'access'
+      when: proxy_role == 'access' and not (mtproxy_enabled | default(false) | bool)
       register: squid_config_access
 
     # Конфигурация для upstream прокси
+    # Порт :80 уже свободен — nginx default site удалён ролью mtproxy
     - name: Deploy Squid config (upstream proxy)
       ansible.builtin.template:
         src: templates/squid-upstream.conf.j2
@@ -220,6 +327,18 @@
         validate: 'squid -k parse -f %s'
       when: proxy_role == 'upstream'
       register: squid_config_upstream
+
+    # Копирование файла паролей (только access, до reload/restart)
+    - name: Deploy passwd file (access only)
+      ansible.builtin.copy:
+        src: passwd
+        dest: "{{ squid_passwd_path }}"
+        owner: root
+        group: proxy
+        mode: '0640'
+      when: proxy_role == 'access' and enable_auth
+      notify: Reload Squid
+      tags: passwd
 
     # Очистка журналов при отключении логирования
     - name: Clean Squid log directory when logging is disabled
@@ -238,7 +357,7 @@
     - name: Get new critical Squid parameters
       ansible.builtin.shell: |
         set -o pipefail
-        HTTP_PORT=$(grep -E '^http_port\s+' {{ squid_config_path }} | awk '{print $2}')
+        HTTP_PORT=$(grep -E '^http_port\s+' {{ squid_config_path }} | head -1 | sed 's/^http_port\s*//')
         CACHE_DIR=$(grep -E '^cache_dir\s+' {{ squid_config_path }} 2>/dev/null | head -1 | awk '{print $2":"$3":"$4":"$5}' || echo 'none')
         echo "${HTTP_PORT}|${CACHE_DIR}"
       args:
@@ -262,8 +381,8 @@
       failed_when: false
       when: squid_config_access.changed | default(false) or squid_config_upstream.changed | default(false)
 
-    # Reload Squid - для изменений ACL, headers, auth, timeouts и т.д.
-    - name: Reload Squid (non-critical config changes)
+    # Reload Squid - для изменений ACL, headers, auth, timeouts и т.д. (non-critical config changes)
+    - name: Reload Squid
       ansible.builtin.systemd:
         name: squid
         state: reloaded
@@ -291,16 +410,6 @@
         (squid_config_access.changed | default(false) or squid_config_upstream.changed | default(false))
         and (squid_restart_required | default(false))
 
-    # Копирование файла паролей (только access)
-    - name: Deploy passwd file (access only)
-      ansible.builtin.copy:
-        src: passwd
-        dest: "{{ squid_passwd_path }}"
-        owner: root
-        group: proxy
-        mode: '0640'
-      when: proxy_role == 'access' and enable_auth
-
     # Примечание: reload/restart Squid выполняется inline выше
     # (не через handlers, т.к. требуется логика выбора reload vs restart)
 
@@ -311,17 +420,12 @@
         creates: /var/spool/squid/00
       when: proxy_role == 'access' and enable_caching
 
-    # Проверка активности ufw для выбора способа настройки firewall
-    - name: Check if ufw is active
-      ansible.builtin.shell: |
-        ufw status 2>/dev/null | grep -q '^Status: active' && echo 'active' || echo 'inactive'
-      register: ufw_status
-      changed_when: false
-      failed_when: false
-      when: proxy_role == 'upstream'
+    # ===========================================================================
+    # Phase: Firewall (upstream only)
+    # ===========================================================================
 
     # Настройка firewall (upstream) - UFW (если ufw активен)
-    - name: Configure UFW for upstream proxy (Ubuntu)
+    - name: Configure UFW for upstream proxy
       when: proxy_role == 'upstream' and ufw_status.stdout | default('') == 'active'
       block:
         - name: Install UFW
@@ -343,13 +447,45 @@
             from_ip: "{{ hostvars[item]['ansible_host'] }}"
           loop: "{{ groups['access_proxies'] }}"
 
+        # Migration: remove old Squid UFW rule for port 443
+        # (Squid moved from behind nginx:443 to dedicated port)
+        # Не удаляем если MTProxy включён — порт 443 используется для SNI router
+        - name: "Migration: remove old Squid UFW rule for port 443"
+          community.general.ufw:
+            rule: allow
+            port: '443'
+            proto: tcp
+            from_ip: "{{ hostvars[item]['ansible_host'] }}"
+            delete: true
+          loop: "{{ groups['access_proxies'] }}"
+          failed_when: false
+          when: squid_port | string != '443' and not (mtproxy_enabled | default(false) | bool)
+
+        - name: Allow MTProxy TLS from access proxies (UFW)
+          community.general.ufw:
+            rule: allow
+            from_ip: "{{ hostvars[item]['ansible_host'] }}"
+            to_port: "443"
+            proto: tcp
+            comment: "MTProxy TLS from {{ item }}"
+          loop: "{{ groups['access_proxies'] }}"
+          when: mtproxy_enabled | default(false) | bool
+
+        - name: Allow DNS (unbound) from access proxies (UFW)
+          community.general.ufw:
+            rule: allow
+            port: '53'
+            proto: "{{ item.1 }}"
+            from_ip: "{{ hostvars[item.0]['ansible_host'] }}"
+          loop: "{{ groups['access_proxies'] | product(['tcp', 'udp']) | list }}"
+
         - name: Enable UFW with default deny
           community.general.ufw:
             state: enabled
             default: deny
             direction: incoming
 
-    # Настройка firewall (upstream) - nftables для Debian (дефолтный с Debian 10)
+    # Настройка firewall (upstream) - nftables (Debian без ufw)
     - name: Configure nftables for upstream proxy (Debian)
       when: proxy_role == 'upstream' and ansible_distribution == 'Debian' and ufw_status.stdout | default('') != 'active'
       block:
@@ -373,7 +509,7 @@
             enabled: true
             state: started
 
-    # Настройка firewall (upstream) - iptables с собственной цепочкой (Ubuntu без ufw, RHEL, CentOS)
+    # Настройка firewall (upstream) - iptables с собственной цепочкой (без ufw, без Debian)
     - name: Configure iptables for upstream proxy (custom chain)
       when: proxy_role == 'upstream' and ansible_distribution != 'Debian' and ufw_status.stdout | default('') != 'active'
       vars:
@@ -410,6 +546,16 @@
             source: "{{ hostvars[item]['ansible_host'] }}"
             jump: ACCEPT
           loop: "{{ groups['access_proxies'] }}"
+
+        - name: Allow MTProxy TLS from access proxies (iptables)
+          ansible.builtin.iptables:
+            chain: "{{ squid_chain }}"
+            protocol: tcp
+            destination_port: "443"
+            source: "{{ hostvars[item]['ansible_host'] }}"
+            jump: ACCEPT
+          loop: "{{ groups['access_proxies'] }}"
+          when: mtproxy_enabled | default(false) | bool
 
         - name: Drop other traffic to Squid port (custom chain)
           ansible.builtin.iptables:
@@ -448,7 +594,10 @@
         enabled: true
         state: started
 
-    # Keepalived для access прокси (VRRP failover)
+    # ===========================================================================
+    # Phase: Keepalived (access proxies only, VRRP failover)
+    # ===========================================================================
+
     - name: Skip Keepalived - VIP not configured
       ansible.builtin.debug:
         msg: "Keepalived пропущен: переменная keepalived_vip не задана в inventory. Для включения VRRP укажите keepalived_vip."
@@ -459,6 +608,16 @@
         name: keepalived
         state: present
       when: proxy_role == 'access' and enable_keepalived | default(false) and keepalived_vip is defined
+
+    - name: Deploy Squid health-check script (auto-restart with cooldown)
+      ansible.builtin.template:
+        src: templates/check_and_restart_squid.sh.j2
+        dest: /etc/keepalived/check_and_restart_squid.sh
+        owner: root
+        group: root
+        mode: '0755'
+      when: proxy_role == 'access' and enable_keepalived | default(false) and keepalived_vip is defined
+      notify: Restart Keepalived
 
     - name: Deploy Keepalived config (access proxy only)
       ansible.builtin.template:
@@ -486,9 +645,26 @@
         state: started
       when: proxy_role == 'access' and enable_keepalived | default(false) and keepalived_vip is defined
 
+    # ===========================================================================
+    # Phase: CrowdSec IPS (Intrusion Prevention System)
+    # ===========================================================================
+
+    - name: Include CrowdSec role
+      ansible.builtin.include_role:
+        name: crowdsec
+      when: crowdsec_enabled | default(false) | bool
+      tags: [crowdsec, security]
+
   handlers:
-    # Примечание: Squid reload/restart выполняется inline в tasks
-    # (требуется логика выбора действия на основе изменённых параметров)
+    # Примечание: Squid restart выполняется inline в tasks
+    # (требуется логика выбора действия на основе изменённых параметров).
+    # Handler ниже — для простого reload (passwd, ACL и т.д.)
+
+    - name: Reload Squid
+      ansible.builtin.systemd:
+        name: squid
+        state: reloaded
+      tags: always
 
     - name: Reload systemd
       ansible.builtin.systemd:

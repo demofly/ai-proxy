@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# ai-assistants-proxy: SNI routing entries
+
+# MTProxy: route fake-TLS domain to mtproxy backend
+{{ mtproxy_fake_tls_domain | default('cloudflare.com') }}  aiproxy_mtproxy;
+
+{% if mtproxy_hostname is defined and mtproxy_hostname != "" %}
+# MTProxy: route public hostname to mtproxy backend
+{{ mtproxy_hostname }}  aiproxy_mtproxy;
+
+{% endif %}

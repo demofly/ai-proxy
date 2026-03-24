@@ -1,0 +1,52 @@
+# {{ ansible_managed }}
+# Shared SNI router for port 443 (stream context)
+# Created by first-deployed project (force: no). DO NOT EDIT MANUALLY.
+#
+# Architecture: nginx stream reads TLS ClientHello SNI without termination
+# and routes the entire TCP connection to the matched upstream.
+# Each co-deployed project adds its own entries to sni-map.d/*.conf.
+
+# ============================================================================
+# SNI-based routing map
+# ============================================================================
+map $ssl_preread_server_name $sni_backend {
+    include /etc/nginx/stream.d/sni-map.d/*.conf;
+    default fallback_squid;
+}
+
+# ============================================================================
+# Fallback upstream: local Squid (or any default handler on 127.0.0.1:3128)
+# ============================================================================
+upstream fallback_squid {
+    server 127.0.0.1:3128;
+}
+
+# ============================================================================
+# SSL preread server (port 443, no TLS termination)
+# ============================================================================
+server {
+    listen 443;
+    listen [::]:443;
+
+    ssl_preread on;
+    proxy_pass $sni_backend;
+
+    # Pass real client IP to backends via PROXY protocol (HAProxy v1)
+    # Backends must accept proxy_protocol (nginx: listen ... proxy_protocol; squid: require-proxy-header)
+    proxy_protocol on;
+
+    # Connection limits не нужны: upstream принимает соединения только от
+    # access-нод (ограничено UFW/nftables), rate limiting — на access-нодах
+
+    # Timeouts: max of all co-deployed projects' requirements
+    # 1800s = 30 min (Squid chain: AI API can "think" up to 30 minutes)
+    # MTProxy chain uses shorter timeouts (60s) in its own stream blocks
+    proxy_connect_timeout 10s;
+    proxy_timeout 1800s;
+
+    # TCP keepalive: detect dead peers via kernel probes
+    proxy_socket_keepalive on;
+
+    # TCP optimization
+    proxy_buffer_size 16k;
+}

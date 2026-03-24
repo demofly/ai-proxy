@@ -48,7 +48,16 @@ acl allowed_domain_regexp dstdom_regex -i {{ pattern }}
 {% endfor %}
 
 # HTTP порт
+{% if nginx_on_443 | default(false) %}
+# За nginx SNI router: слушаем на localhost с PROXY protocol
+# nginx передаёт реальный IP клиента через PROXY protocol (HAProxy v1)
+http_port 127.0.0.1:{{ squid_local_port | default(3128) }} require-proxy-header
+acl localhost_pp src 127.0.0.1
+proxy_protocol_access allow localhost_pp
+proxy_protocol_access deny all
+{% else %}
 http_port {{ squid_port }}
+{% endif %}
 
 {% if groups['upstreams'] is defined and groups['upstreams'] | length > 0 %}
 # Upstream прокси с автоматическим failover
@@ -58,7 +67,11 @@ http_port {{ squid_port }}
 # connect-timeout=5 - таймаут подключения 5 секунд (быстрое обнаружение проблем)
 {% for upstream_host in groups['upstreams'] %}
 {% set upstream = hostvars[upstream_host] %}
+{% if squid_tls_sni is defined %}
+cache_peer {{ upstream.ansible_host }} parent {{ upstream.squid_port }} 0 no-query userhash tls tls-no-default-ca tls-domain={{ squid_tls_sni }} connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
+{% else %}
 cache_peer {{ upstream.ansible_host }} parent {{ upstream.squid_port }} 0 no-query userhash connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
+{% endif %}
 {% endfor %}
 
 # Время восстановления dead peer (проверять каждые 15 секунд)
@@ -132,7 +145,9 @@ request_header_add Cache-Control "max-age=0"
 
 # Настройки производительности
 connect_timeout 15 seconds
-read_timeout 30 seconds
+# read_timeout — время ожидания данных от сервера (AI API может «думать» 10+ минут)
+# Для CONNECT-туннелей: если данные не поступают за это время, соединение закрывается
+read_timeout {{ read_timeout | default('15 minutes') }}
 request_timeout 30 seconds
 persistent_request_timeout 60 seconds
 client_lifetime 1 hour
@@ -185,8 +200,7 @@ ftp_sanitycheck on
 icp_port 0
 
 # Настройки DNS
-dns_nameservers {{ dns_servers | join(' ') }}
-dns_v4_first on
+dns_nameservers 127.0.0.1
 dns_retransmit_interval 2 seconds
 dns_timeout 15 seconds
 positive_dns_ttl 6 hours
