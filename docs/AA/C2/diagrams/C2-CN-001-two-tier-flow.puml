@@ -1,0 +1,47 @@
+@startuml C2-CN-001-two-tier-flow
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Двухуровневый поток запроса с разделением ответственности
+
+actor "Клиент\n(IDE)" as client
+box "Access tier (РФ)" #E8F5E9
+  participant "VIP\n(Keepalived)" as vip
+  participant "nginx SNI Router\n:443" as nginx
+  participant "Squid Access\n:3128" as access
+  database "access.log" as log
+  participant "CrowdSec" as cs
+end box
+box "Upstream tier (вне РФ)" #E3F2FD
+  participant "UFW Firewall" as ufw
+  participant "Squid Upstream\n:80" as upstream
+end box
+participant "AI API" as api
+
+== Access tier: контроль ==
+
+client -> vip : HTTPS proxy :443\n(Proxy-Auth: Basic)
+vip -> nginx : (VIP → MASTER)
+nginx -> access : SNI default\nlocalhost:3128\n(PROXY protocol)
+access -> access : Аутентификация\n(basic_ncsa_auth)
+access -> access : ACL проверка\n(allowed_domains)
+access -> log : Запись в access.log\n(IP, user, URL, status)
+cs -> log : Мониторинг (tail)
+
+== Upstream tier: транспорт ==
+
+access -> ufw : cache_peer :80
+ufw -> ufw : Проверка IP\n(только access-прокси)
+ufw -> upstream : ACCEPT
+
+upstream -> upstream : Удаление заголовков:\nX-Forwarded-For, Via
+upstream -> api : HTTPS :443\n(анонимный запрос)
+note over api : AI API видит\nтолько IP upstream
+
+api --> upstream : Ответ
+upstream --> access : Ответ
+access --> client : Ответ
+
+@enduml

@@ -1,0 +1,40 @@
+@startuml C2-NF-001-upstream-failover
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Upstream failover — userhash rehash
+
+state "Upstream-1 alive\nUpstream-2 alive" as normal #C8E6C9 {
+  state "userhash routing" as uh : user A → upstream-1\nuser B → upstream-2\n(детерминированно по хешу)
+}
+
+state "Upstream-1 failed" as failed1 #FFCDD2 {
+  state "userhash rehash" as sh1 : user A → upstream-2\nuser B → upstream-2\n(хеш-кольцо перестроено\nсреди живых peers)
+}
+
+state "Upstream-1 recovered" as recovery #FFF9C4 {
+  state "dead_peer_timeout" as dpt : Ожидание 15 сек\nзатем retry
+}
+
+[*] --> normal
+
+normal --> failed1 : connect-fail-limit=2\n(2 неудачных TCP-соединения)
+failed1 --> recovery : dead_peer_timeout=15s
+recovery --> normal : retry успешен\n(upstream-1 жив)
+recovery --> failed1 : retry неудачен\n(upstream-1 ещё мёртв)
+
+note right of normal
+  Основной алгоритм: **userhash**
+  Каждый пользователь привязан
+  к конкретному upstream
+end note
+
+note right of failed1
+  При отказе peer: **rehash**
+  Squid перестраивает хеш-кольцо
+  среди живых upstream-нод
+end note
+
+@enduml

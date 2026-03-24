@@ -1,0 +1,79 @@
+@startuml DD-LDM
+!theme plain
+skinparam linetype ortho
+skinparam padding 4
+skinparam defaultFontName "Segoe UI"
+
+title Логическая модель данных (LDM)\nAI Assistants Proxy
+
+entity "Credential" as cred {
+  * **username** : string <<PK>>
+  --
+  * password_hash : string
+  * realm : string
+}
+
+entity "ACL Entry" as acl {
+  * **source_ip** : ipv4 <<PK>>
+  * **destination_port** : integer <<PK>>
+  --
+  * action : enum {allow, deny}
+}
+
+entity "Domain Rule" as domain {
+  * **pattern** : string <<PK>>
+  --
+  * type : enum {exact, regex}
+  * action : enum {allow, deny}
+}
+
+entity "Config Parameter" as config {
+  * **name** : string <<PK>>
+  * **scope** : enum {access, upstream, global} <<PK>>
+  --
+  * value : any
+  * type : enum {string, integer, boolean, list, map}
+  * default : any
+}
+
+entity "Log Record" as log {
+  * **timestamp** : datetime <<PK>>
+  * **client_ip** : ipv4 <<PK>>
+  --
+  * method : string
+  * url : string
+  * status_code : integer
+  * username : string
+  * bytes : integer
+  * duration : integer
+}
+
+entity "Secret" as secret {
+  * **name** : string <<PK>>
+  --
+  * value : string
+  * type : enum {hex, string}
+  * scope : enum {access, upstream, global}
+}
+
+note right of cred
+  Хранится в формате htpasswd
+  (NCSA auth: user:$apr1$hash)
+end note
+
+note right of log
+  Стандартный logformat squid
+  (native format) в access.log
+end note
+
+note right of domain
+  exact: dstdomain ACL
+  regex: dstdom_regex ACL
+end note
+
+cred "1" -- "*" log : username >
+config "1" -- "*" domain : определяет >
+config "1" -- "*" acl : определяет >
+config "1" -- "*" secret : содержит >
+
+@enduml

@@ -1,0 +1,104 @@
+@startuml TD-deployment
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam NodeBorderColor #333333
+skinparam ComponentBorderColor #555555
+skinparam RectangleBorderColor #777777
+
+title Диаграмма развёртывания AI Assistants Proxy
+
+' --- Actors ---
+actor "Клиент\n(IDE/браузер)" as client
+actor "Telegram\nклиент" as tg_client
+
+' --- VIP (network element) ---
+rectangle "VIP\n(192.168.0.2)" as vip #FFF9C4
+
+' --- Access Tier (РФ) ---
+rectangle "Access Tier (РФ)" as access_tier #E8F5E9 {
+
+  node "Access Node 1\n(MASTER)" as an1 {
+    component "nginx SNI Router\n:443" as nginx1 #A5D6A7
+    component "Squid Access\nlocalhost:3128" as squid_a1 #C8E6C9
+    component "TLS Relay\nlocalhost:9443" as relay1 #A5D6A7
+    component "Keepalived\n(MASTER)" as ka1 #E8F5E9
+    component "CrowdSec\nAgent + Bouncer" as cs1 #81C784
+    component "unbound\nlocalhost:53" as dns1 #A5D6A7
+  }
+
+  node "Access Node 2\n(BACKUP)" as an2 {
+    component "nginx SNI Router\n:443" as nginx2 #A5D6A7
+    component "Squid Access\nlocalhost:3128" as squid_a2 #C8E6C9
+    component "TLS Relay\nlocalhost:9443" as relay2 #A5D6A7
+    component "Keepalived\n(BACKUP)" as ka2 #E8F5E9
+    component "CrowdSec\nAgent + Bouncer" as cs2 #81C784
+    component "unbound\nlocalhost:53" as dns2 #A5D6A7
+  }
+}
+
+' --- Upstream Tier (вне РФ) ---
+rectangle "Upstream Tier (вне РФ)" as upstream_tier #E3F2FD {
+
+  node "Upstream Node 1" as un1 {
+    component "nginx SNI Router\n:443 (MTProxy only)" as nginx_u1 #64B5F6
+    component "Squid Upstream\n:80 (direct)" as squid_u1 #90CAF9
+    component "MTProxy (mtg)\nlocalhost:2083" as mtp1 #42A5F5
+    component "Firewall\n(UFW)" as fw1 #BBDEFB
+    component "CrowdSec\nAgent + Bouncer" as cs_u1 #90CAF9
+    component "unbound\nlocalhost:53" as dns_u1 #64B5F6
+  }
+}
+
+' --- External ---
+cloud "AI API\n(Claude, ChatGPT,\nGemini, Copilot, ...)" as ai_api #FFF3E0
+cloud "Telegram DC" as tg_dc #FFF3E0
+cloud "CrowdSec\nCentral API" as cs_api #FFF3E0
+
+' === Data plane connections (solid) ===
+
+' Client -> VIP -> nginx -> Squid Access -> Squid Upstream -> AI API
+client -[#2E7D32]-> vip : HTTPS\nproxy :443
+vip -[#2E7D32]-> nginx1 : TLS (SNI preread)
+
+nginx1 -[#2E7D32]-> squid_a1 : default\nlocalhost:3128\n(PROXY protocol)
+nginx2 -[#2E7D32]-> squid_a2 : default\nlocalhost:3128\n(PROXY protocol)
+
+squid_a1 -[#1565C0]-> squid_u1 : cache_peer\n:80 (userhash)
+squid_a2 -[#1565C0]-> squid_u1 : cache_peer\n:80 (userhash)
+
+squid_u1 -[#E65100]-> ai_api : HTTPS :443
+
+' Telegram: client -> VIP -> nginx (access) -> TLS relay -> nginx (upstream) -> mtg -> Telegram DC
+tg_client -[#0D47A1]-> vip : fake-TLS :443
+nginx1 -[#0D47A1]-> relay1 : SNI route\n→ :9443
+relay1 -[#0D47A1]-> nginx_u1 : TLS 1.3\nupstream :443
+nginx_u1 -[#0D47A1]-> mtp1 : SNI route\n→ :2083
+mtp1 -[#E65100]-> tg_dc : MTProto
+
+' === Control plane connections (dashed) ===
+
+' Keepalived VRRP
+ka1 .[#388E3C].> ka2 : VRRP heartbeat\n(multicast 224.0.0.18)
+ka1 .[#388E3C].> vip : управление VIP
+
+' CrowdSec
+cs1 .[#666666].> squid_a1 : парсинг\naccess.log
+cs2 .[#666666].> squid_a2 : парсинг\naccess.log
+cs1 .[#666666].> cs_api : pull/push
+cs2 .[#666666].> cs_api : pull/push
+cs_u1 .[#666666].> cs_api : pull/push
+
+' --- Легенда ---
+legend right
+  |= Цвет линии |= Назначение |
+  |<#2E7D32> сплошная | Клиент → Access (HTTPS proxy :443) |
+  |<#0D47A1> сплошная | Telegram (fake-TLS :443 → relay → upstream) |
+  |<#1565C0> сплошная | Access → Upstream (cache_peer :80) |
+  |<#E65100> сплошная | Upstream → внешний API / Telegram DC |
+  |<#388E3C> пунктир | VRRP / Keepalived (control plane) |
+  |<#666666> пунктир | CrowdSec мониторинг (control plane) |
+end legend
+
+@enduml

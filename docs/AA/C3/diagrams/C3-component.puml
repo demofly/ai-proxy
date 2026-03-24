@@ -1,0 +1,92 @@
+@startuml C3-component
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam componentStyle rectangle
+skinparam defaultFontSize 12
+skinparam packageStyle frame
+skinparam linetype ortho
+
+title Компонентная диаграмма AI Assistants Proxy
+
+actor "Инженер\n(IDE / Браузер)" as User
+actor "Telegram-клиент" as TgUser
+actor "DevOps-инженер" as DevOps
+
+cloud "AI API\n(Claude, ChatGPT,\nGemini, Copilot)" as AIAPI
+cloud "Telegram DC" as TgDC
+cloud "CrowdSec CAPI\n(Threat Intelligence)" as CAPI
+cloud "DNS\n(Quad9, Google,\nCloudflare)" as DNS
+
+package "Access Tier (РФ)" as AccessTier {
+    component "nginx SNI Router\n[C3-NX-001]\n:443 → SNI routing" as NginxSNI #LightBlue
+    component "Squid Access Proxy\n[C3-SA-001]\nlocalhost:3128 (за nginx)\nAuth + ACL + Cache" as SquidAccess #LightGreen
+    component "Keepalived VRRP\n[C3-KA-001]\nVirtual IP failover" as Keepalived #LightYellow
+    component "CrowdSec IPS\n[C3-CS-001]\nLog analysis + nftables" as CrowdSecAccess #LightCoral
+    component "unbound DNS\nlocalhost:53" as UnboundAccess #LightBlue
+}
+
+package "Upstream Tier (вне РФ)" as UpstreamTier {
+    component "nginx SNI Router\n[C3-NX-001]\n:443 → MTProxy only" as NginxUpstream #LightBlue
+    component "Squid Upstream Proxy\n[C3-SU-001]\n:80 (direct, без nginx)\nAnonymous transport" as SquidUpstream #LightGreen
+    component "MTProxy (mtg)\n[C3-MT-001]\nlocalhost:2083\nfake-TLS Telegram" as MTProxy #Plum
+    component "CrowdSec IPS\n[C3-CS-001]\nSSH log analysis" as CrowdSecUpstream #LightCoral
+    component "unbound DNS\nlocalhost:53" as UnboundUpstream #LightBlue
+}
+
+package "Control Plane" as ControlPlane {
+    component "Ansible Deployment\n[C3-AD-001]\nplaybook + roles +\ntemplates" as Ansible #Wheat
+}
+
+' --- Пользовательские подключения ---
+User --> NginxSNI : HTTPS\n(HTTP CONNECT)
+TgUser --> NginxSNI : TLS\n(fake-TLS SNI)
+
+' --- Access SNI Router -> бэкенды ---
+NginxSNI --> SquidAccess : default SNI\nlocalhost:3128\n(PROXY protocol)
+NginxSNI --> NginxUpstream : MTProxy SNI\nTLS relay :9443\n→ upstream :443
+
+' --- Upstream SNI Router -> бэкенды ---
+NginxUpstream --> MTProxy : SNI route\n→ localhost:2083
+
+' --- Access -> Upstream (direct, no nginx) ---
+SquidAccess --> SquidUpstream : cache_peer\nuserhash balancing\n:80
+
+' --- Upstream -> External ---
+SquidUpstream --> AIAPI : HTTPS\n(TLS tunnel)
+SquidUpstream --> UnboundUpstream : DNS queries\nlocalhost:53
+UnboundUpstream --> DNS : DNS forwarding
+MTProxy --> TgDC : MTProto
+
+' --- CrowdSec ---
+CrowdSecAccess ..> SquidAccess : читает\naccess.log
+CrowdSecAccess --> CAPI : alerts /\nblocklist
+CrowdSecUpstream --> CAPI : alerts /\nblocklist
+
+' --- Keepalived ---
+Keepalived ..> SquidAccess : health check\n(killall -0 squid)
+
+' --- Ansible ---
+DevOps --> Ansible : ansible-playbook
+Ansible ..> SquidAccess : SSH deploy
+Ansible ..> SquidUpstream : SSH deploy
+Ansible ..> NginxSNI : SSH deploy\n(role: nginx)
+Ansible ..> NginxUpstream : SSH deploy\n(role: mtproxy)
+Ansible ..> MTProxy : SSH deploy\n(role: mtproxy)
+Ansible ..> CrowdSecAccess : SSH deploy\n(role: crowdsec)
+Ansible ..> CrowdSecUpstream : SSH deploy\n(role: crowdsec)
+Ansible ..> Keepalived : SSH deploy
+
+' --- Легенда ---
+legend right
+  |= Цвет |= Назначение |
+  |<#LightGreen>| Squid Proxy |
+  |<#LightBlue>| nginx Router / DNS |
+  |<#LightYellow>| HA (Keepalived) |
+  |<#LightCoral>| IPS (CrowdSec) |
+  |<#Plum>| Telegram Proxy |
+  |<#Wheat>| Deployment (Ansible) |
+  ── сплошная = data flow
+  .. пунктир = management / monitoring
+end legend
+
+@enduml

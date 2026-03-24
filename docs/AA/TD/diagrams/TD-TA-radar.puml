@@ -1,0 +1,53 @@
+@startuml TD-TA-radar
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam componentBackgroundColor #FFFFFF
+
+title Technology Radar — AI Assistants Proxy
+
+rectangle "HOLD" as hold #FFCDD2 {
+  note as n_hold
+    (пусто)
+  end note
+}
+
+rectangle "ASSESS" as assess #FFF9C4 {
+  note as n_assess
+    (пусто)
+  end note
+}
+
+rectangle "TRIAL" as trial #C8E6C9 {
+  note as n_trial
+    (пусто)
+  end note
+}
+
+rectangle "ADOPT" as adopt #BBDEFB {
+  component "Squid 6.x" as t01 #81D4FA
+  component "nginx 1.x" as t02 #81D4FA
+  component "Keepalived 2.x" as t03 #81D4FA
+  component "CrowdSec 1.x" as t04 #81D4FA
+  component "mtg 2.1.8" as t05 #81D4FA
+  component "Ansible ≥2.15" as t06 #81D4FA
+  component "nftables" as t07 #81D4FA
+  component "Ubuntu 24.04" as t08 #81D4FA
+  component "Debian bookworm" as t09 #81D4FA
+  component "htpasswd" as t10 #81D4FA
+}
+
+adopt -[hidden]-> trial
+trial -[hidden]-> assess
+assess -[hidden]-> hold
+
+legend right
+  |= Кольцо |= Значение |
+  |<#BBDEFB> Adopt | Проверено, рекомендовано к использованию |
+  |<#C8E6C9> Trial | Допускается в ограниченных сценариях |
+  |<#FFF9C4> Assess | Только для прототипов |
+  |<#FFCDD2> Hold | Не рекомендуется для новых проектов |
+end legend
+
+@enduml

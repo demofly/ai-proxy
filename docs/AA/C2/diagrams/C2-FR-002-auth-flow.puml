@@ -1,0 +1,37 @@
+@startuml C2-FR-002-auth-flow
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Механизм аутентификации Basic Auth (access-прокси)
+
+actor "Клиент\n(IDE/браузер)" as client
+participant "Squid Access\n:3128" as squid
+participant "basic_ncsa_auth\n(helper)" as auth
+database "/etc/squid/passwd\n(bcrypt)" as passwd
+
+== Первый запрос (без credentials) ==
+
+client -> squid : CONNECT api.anthropic.com:443
+squid --> client : HTTP 407 Proxy Authentication Required\n(Proxy-Authenticate: Basic realm="Squid Proxy Authentication")
+
+== Повторный запрос (с credentials) ==
+
+client -> squid : CONNECT api.anthropic.com:443\nProxy-Authorization: Basic <base64(user:pass)>
+squid -> auth : user password
+auth -> passwd : lookup user
+passwd --> auth : bcrypt hash
+
+alt Пароль верный
+  auth --> squid : OK
+  squid -> squid : Проверка ACL\n(allowed_domains / allowed_domain_patterns)
+  squid --> client : HTTP 200 Connection established
+  note right : CONNECT-туннель установлен\n(TLS end-to-end)
+else Пароль неверный
+  auth --> squid : ERR
+  squid --> client : HTTP 407
+  note right : Неудачная попытка\nзаписывается в access.log\n→ CrowdSec анализ
+end
+
+@enduml

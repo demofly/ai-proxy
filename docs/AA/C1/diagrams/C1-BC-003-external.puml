@@ -1,0 +1,70 @@
+@startuml C1-BC-003-external
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName "DejaVu Sans"
+
+title Интеграция с внешними системами
+
+rectangle "AI Assistants Proxy" as system #LightBlue {
+  rectangle "Access Proxy" as access
+  rectangle "Upstream Proxy" as upstream
+  rectangle "MTProxy" as mtproxy
+  rectangle "CrowdSec Agent" as csagent
+}
+
+package "AI-сервисы" as ai #LightGreen {
+  rectangle "Anthropic\n(Claude)" as claude
+  rectangle "OpenAI\n(ChatGPT)" as openai
+  rectangle "Google\n(Gemini)" as google
+  rectangle "GitHub\n(Copilot)" as github
+  rectangle "Microsoft\n(Azure AI)" as msai
+  rectangle "xAI\n(Grok)" as xai
+  rectangle "Cursor" as cursor
+  rectangle "DeepL" as deepl
+  rectangle "Alibaba\n(Qwen)" as alibaba
+  rectangle "Mistral AI" as mistral
+  rectangle "Groq" as groq
+  rectangle "DeepSeek" as deepseek
+  rectangle "Cerebras" as cerebras
+  rectangle "SambaNova" as sambanova
+}
+
+package "Инфраструктура" as infra #LightYellow {
+  rectangle "DNS Resolvers\n9.9.9.9\n8.8.8.8\n1.1.1.1" as dns
+  rectangle "CrowdSec\nCentral API" as csapi
+  rectangle "GitHub Releases\n(mtg binary)" as ghrel
+  rectangle "APT\nRepositories" as apt
+}
+
+package "Messaging" as msg #LightCoral {
+  rectangle "Telegram\nData Centers" as tgdc
+}
+
+upstream --> claude : HTTPS
+upstream --> openai : HTTPS
+upstream --> google : HTTPS
+upstream --> github : HTTPS
+upstream --> msai : HTTPS
+upstream --> xai : HTTPS
+upstream --> cursor : HTTPS
+upstream --> deepl : HTTPS
+upstream --> alibaba : HTTPS
+upstream --> mistral : HTTPS
+upstream --> groq : HTTPS
+upstream --> deepseek : HTTPS
+upstream --> cerebras : HTTPS
+upstream --> sambanova : HTTPS
+
+upstream --> dns : DNS (UDP/TCP 53)
+csagent --> csapi : HTTPS\n(scenarios, alerts)
+mtproxy --> tgdc : MTProto
+
+note right of ai
+  Белый список доменов
+  контролируется через
+  allowed_domains и
+  allowed_domain_patterns
+  в inventory.yml
+end note
+
+@enduml

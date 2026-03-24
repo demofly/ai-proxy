@@ -1,0 +1,53 @@
+@startuml C2-NF-001-vrrp-failover
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title VRRP Failover — автоперезапуск Squid и переключение VIP
+
+participant "Клиент" as client
+participant "VIP" as vip #FFF9C4
+participant "Access-1\n(MASTER, prio=100)" as master
+participant "Access-2\n(BACKUP, prio=90)" as backup
+
+== Нормальная работа ==
+
+master -> backup : VRRP advertisement\n(каждые 1с, multicast)
+client -> vip : HTTPS proxy :443
+vip -> master : (VIP на master)
+
+== Отказ Squid на Master ==
+
+master -> master : check_and_restart_squid.sh\nkillall -0 squid → FAIL (fall 1/3)
+note right : systemctl restart squid\n(cooldown 30s)
+master -> backup : VRRP advertisement
+
+== Вариант A: Squid перезапустился ==
+
+master -> master : check_squid → OK (rise 1/2)
+master -> master : check_squid → OK (rise 2/2)\n**priority восстановлен = 100**
+note right #90EE90 : Самовосстановление\nbez failover
+master -> backup : VRRP advertisement
+client -> vip : HTTPS proxy :443
+vip -> master : (VIP остаётся на master)
+
+== Вариант B: Squid не поднялся ==
+
+master -> master : check_squid → FAIL (fall 2/3)
+master -> backup : VRRP advertisement
+master -> master : check_squid → FAIL (fall 3/3)\n**priority 100 → 80**
+note right : weight -20 применён\npriority(80) < backup(90)
+
+master -> backup : VRRP advert prio=80
+note over backup : Свой priority(90) >\nadvert priority(80)\n→ Preempt
+
+== Failover ==
+
+backup -> backup : BACKUP → MASTER\nGratuitous ARP
+backup -> vip : VIP перенесён\nна Access-2
+client -> vip : HTTPS proxy :443
+vip -> backup : (VIP на backup)
+note over client : Клиент продолжает работу\nчерез тот же VIP-адрес
+
+@enduml

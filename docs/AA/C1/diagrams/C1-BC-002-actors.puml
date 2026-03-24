@@ -1,0 +1,47 @@
+@startuml C1-BC-002-actors
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName "DejaVu Sans"
+
+title Взаимодействие акторов с AI Assistants Proxy
+
+actor "Инженер-\nразработчик" as engineer
+actor "DevOps-\nинженер" as devops
+actor "Telegram-\nпользователь" as tguser
+
+participant "IDE\n(VSCode / JetBrains)" as ide
+participant "Access Proxy\n(Squid)" as access
+participant "nginx SNI\n(access)" as nginx_a
+participant "Upstream Proxy\n(Squid)" as upstream
+participant "nginx SNI\n(upstream)" as nginx_u
+participant "MTProxy\n(mtg)" as mtproxy
+participant "AI API" as aiapi
+participant "Telegram DC" as tgdc
+
+== Основной сценарий: AI API ==
+engineer -> ide : Запрос к AI-ассистенту
+ide -> access : CONNECT api.anthropic.com:443\n(Basic Auth)
+access -> access : Аутентификация\nПроверка домена\nЖурналирование
+access -> upstream : CONNECT api.anthropic.com:443\n(cache_peer :80, userhash lb)
+upstream -> aiapi : CONNECT api.anthropic.com:443\n(анонимно)
+aiapi --> upstream : Ответ AI
+upstream --> access : Ответ
+access --> ide : Ответ
+ide --> engineer : Результат
+
+== Сценарий: Telegram через MTProxy ==
+tguser -> nginx_a : TLS ClientHello\n(SNI=example.gov.ru)\n:443
+nginx_a -> nginx_a : TLS relay :9443\n→ upstream :443
+nginx_a -> nginx_u : TLS 1.3\n(SNI=tgproxy.example.com)
+nginx_u -> mtproxy : SNI route\n→ localhost:2083
+mtproxy -> tgdc : MTProto
+tgdc --> mtproxy : Данные
+mtproxy --> nginx_u : Ответ
+nginx_u --> nginx_a : Ответ
+nginx_a --> tguser : Ответ
+
+== Сценарий: Развёртывание ==
+devops -> access : ansible-playbook\n(SSH)
+devops -> upstream : ansible-playbook\n(SSH)
+
+@enduml

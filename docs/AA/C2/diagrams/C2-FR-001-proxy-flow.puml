@@ -1,0 +1,67 @@
+@startuml C2-FR-001-proxy-flow
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam sequenceMessageAlign center
+
+title Поток проксирования запроса к AI API
+
+actor "Клиент\n(IDE / CLI / Браузер)" as Client
+participant "Keepalived\nVIP" as VIP
+box "Access tier (РФ)" #E8F5E9
+  participant "Squid\nAccess-прокси" as AccessProxy
+end box
+box "Upstream tier (за рубежом)" #E3F2FD
+  participant "Squid\nUpstream-прокси" as UpstreamProxy
+end box
+participant "AI API\n(Claude / GPT / Gemini)" as AIAPI
+
+== Установление CONNECT-туннеля ==
+
+Client -> VIP : CONNECT api.anthropic.com:443
+VIP -> AccessProxy : (VRRP → Master)
+
+AccessProxy -> AccessProxy : Аутентификация\n(basic_ncsa_auth)
+
+alt Аутентификация не пройдена
+  AccessProxy --> Client : HTTP 407\nProxy Authentication Required
+else Аутентификация пройдена
+  AccessProxy -> AccessProxy : Проверка ACL\n(dstdomain / dstdom_regex)
+
+  alt Домен не в whitelist
+    AccessProxy --> Client : HTTP 403 Forbidden
+    AccessProxy -> AccessProxy : Запись в access.log\n(DENIED)
+  else Домен разрешён
+    AccessProxy -> AccessProxy : Запись в access.log\n(username, domain, peer)
+    AccessProxy -> AccessProxy : Выбор upstream\n(userhash по username)
+    AccessProxy -> UpstreamProxy : CONNECT api.anthropic.com:443\n(через cache_peer, HTTPS)
+
+    UpstreamProxy -> UpstreamProxy : Проверка IP источника\n(nftables ACL)
+
+    alt IP не в списке access-прокси
+      UpstreamProxy --> AccessProxy : Connection refused
+      AccessProxy --> Client : HTTP 503\nService Unavailable
+    else IP разрешён
+      UpstreamProxy -> UpstreamProxy : Анонимизация заголовков\n(X-Forwarded-For delete,\nVia off)
+      UpstreamProxy -> AIAPI : CONNECT → TLS Handshake
+
+      AIAPI --> UpstreamProxy : TLS Established
+      UpstreamProxy --> AccessProxy : HTTP 200\nConnection Established
+      AccessProxy --> Client : HTTP 200\nConnection Established
+
+      == Передача данных (TLS-туннель) ==
+
+      Client <-> AccessProxy : Зашифрованный трафик
+      AccessProxy <-> UpstreamProxy : Зашифрованный трафик
+      UpstreamProxy <-> AIAPI : Зашифрованный трафик
+
+      note over Client, AIAPI
+        End-to-end TLS: прокси не видят содержимое запросов.
+        Туннель живёт до read_timeout (30 мин).
+      end note
+    end
+  end
+end
+
+@enduml

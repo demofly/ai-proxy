@@ -1,0 +1,122 @@
+@startuml TD-network
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Сетевая топология и потоки трафика AI Assistants Proxy
+
+' --- Actors ---
+actor "Клиент\n(IDE/браузер)" as client
+actor "Telegram\nклиент" as tg_client
+actor "DevOps" as devops
+
+' --- VIP ---
+rectangle "VIP\n(keepalived)" as vip #FFF9C4
+
+' --- Access Network ---
+rectangle "Сеть Access Tier (РФ)" as access_net #E8F5E9 {
+
+  rectangle "Access Node 1 (MASTER)" as an1 {
+    portin "443/tcp" as p_443_a1
+    portin "VRRP/112" as p_vrrp1
+    component "nginx SNI Router" as nx1
+    component "Squid Access\nlocalhost:3128" as sa1
+    component "TLS Relay\nlocalhost:9443" as relay1
+    component "Keepalived" as ka1
+    component "CrowdSec" as cs1
+    component "unbound\nlocalhost:53" as dns1
+  }
+
+  rectangle "Access Node 2 (BACKUP)" as an2 {
+    portin "443/tcp" as p_443_a2
+    portin "VRRP/112" as p_vrrp2
+    component "nginx SNI Router" as nx2
+    component "Squid Access\nlocalhost:3128" as sa2
+    component "Keepalived" as ka2
+    component "CrowdSec" as cs2
+    component "unbound\nlocalhost:53" as dns2
+  }
+}
+
+' --- Upstream Network ---
+rectangle "Сеть Upstream Tier (вне РФ)" as upstream_net #E3F2FD {
+
+  rectangle "Upstream Node 1" as un1 {
+    portin "443/tcp" as p_443_u1
+    portin "80/tcp" as p_80_u1
+    component "nginx SNI Router\n(MTProxy only)" as nx_u1
+    component "Squid Upstream\n:80 (direct)" as su1
+    component "MTProxy (mtg)\nlocalhost:2083" as mt1
+    component "Firewall\n(UFW)" as nf1
+    component "CrowdSec" as cs_u1
+    component "unbound\nlocalhost:53" as dns_u1
+  }
+}
+
+' --- External ---
+cloud "AI API\n:443/HTTPS" as ai
+cloud "Telegram DC" as tg
+cloud "DNS\n(9.9.9.9, 8.8.8.8, 1.1.1.1)" as dns
+cloud "CrowdSec API" as csapi
+
+' === Data plane (solid) ===
+
+' Client -> VIP -> nginx (access) -> Squid Access -> Squid Upstream :80 -> AI API
+client -[#2E7D32]-> vip : HTTPS proxy\n:443
+vip -[#2E7D32]-> p_443_a1 : TLS (SNI preread)
+p_443_a1 --> nx1
+nx1 -[#2E7D32]-> sa1 : default\nlocalhost:3128\n(PROXY protocol)
+
+sa1 -[#1565C0]-> p_80_u1 : cache_peer\n:80 (userhash)
+p_80_u1 --> su1
+
+su1 -[#E65100]-> ai : HTTPS :443\n(анонимный)
+
+' DNS: unbound -> external
+dns_u1 --> dns : UDP :53
+
+' Telegram: client -> VIP -> nginx (access) -> TLS relay -> upstream nginx -> mtg -> Telegram DC
+tg_client -[#0D47A1]-> vip : fake-TLS :443
+nx1 -[#0D47A1]-> relay1 : SNI route\n→ :9443
+relay1 -[#0D47A1]-> p_443_u1 : TLS 1.3\nupstream :443
+p_443_u1 --> nx_u1
+nx_u1 -[#0D47A1]-> mt1 : SNI route\n→ :2083
+mt1 -[#E65100]-> tg : MTProto
+
+' === Control plane (dashed) ===
+
+' VRRP heartbeat
+p_vrrp1 <.[#FF6F00].> p_vrrp2 : VRRP multicast\nproto 112
+
+' Keepalived -> VIP management
+ka1 .[#388E3C].> vip : управление VIP
+ka1 .[#388E3C].> sa1 : health check\n(killall -0 squid)
+
+' CrowdSec
+cs1 .[#666666].> sa1 : парсинг access.log
+cs1 .[#666666].> csapi : HTTPS\n(scenarios, decisions)
+cs_u1 .[#666666].> csapi : HTTPS\n(scenarios, decisions)
+
+' Firewall
+nf1 .[#666666].> p_80_u1 : UFW\n(allow access IPs)
+nf1 .[#666666].> p_443_u1 : UFW\n(allow MTProxy)
+
+' DevOps
+devops -[#9C27B0]-> an1 : SSH :22\n(Ansible)
+devops -[#9C27B0]-> un1 : SSH :22\n(Ansible)
+
+' --- Легенда ---
+legend right
+  |= Цвет линии |= Назначение |
+  |<#2E7D32> сплошная | Клиент → Access (HTTPS proxy :443) |
+  |<#0D47A1> сплошная | Telegram (fake-TLS :443 → relay → upstream) |
+  |<#1565C0> сплошная | Access → Upstream (cache_peer :80) |
+  |<#E65100> сплошная | Upstream → внешний API / Telegram DC |
+  |<#9C27B0> сплошная | DevOps SSH :22 (Ansible) |
+  |<#FF6F00> пунктир | VRRP heartbeat (proto 112) |
+  |<#388E3C> пунктир | Keepalived управление (control plane) |
+  |<#666666> пунктир | CrowdSec / Firewall (control plane) |
+end legend
+
+@enduml

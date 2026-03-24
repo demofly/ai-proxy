@@ -1,0 +1,41 @@
+@startuml C2-NF-004-scaling-flow
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Горизонтальное масштабирование: добавление upstream-ноды
+
+|DevOps|
+start
+:Добавить новую ноду\nв inventory.yml\n(группа upstreams);
+
+:Запустить ansible-playbook\n-i inventory.yml playbook.yml;
+
+|Ansible|
+fork
+  :SSH → новая нода;
+  :Установить Squid (upstream),\nnginx SNI, mtg, CrowdSec,\nnftables;
+fork again
+  :SSH → все access-ноды;
+  :Перегенерировать squid.conf\n(новый cache_peer\nиз {% for upstream in\ngroups['upstreams'] %});
+  :squid -k reconfigure;
+end fork
+
+|Squid Access|
+:userhash пересчитывает\nраспределение пользователей;
+
+note right
+  Consistent hashing:
+  перемещается ≤ 1/N
+  пользователей
+end note
+
+:Новые CONNECT-запросы\nмаршрутизируются с учётом\nнового upstream;
+
+|DevOps|
+:Проверить трафик\nна новой ноде\n(access.log);
+
+stop
+
+@enduml

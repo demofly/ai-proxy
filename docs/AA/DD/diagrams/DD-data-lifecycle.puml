@@ -1,0 +1,76 @@
+@startuml DD-data-lifecycle
+!theme plain
+skinparam padding 4
+skinparam defaultFontName "Segoe UI"
+
+title Жизненный цикл сущностей данных\nAI Assistants Proxy
+
+|DevOps-инженер|
+start
+:Редактирование inventory.yml
+(параметры, домены, секреты);
+
+|Ansible|
+:Запуск playbook.yml;
+fork
+  :Рендеринг squid.conf
+  (access tier);
+  note right
+    Домены (DE-DM-001)
+    Параметры (DE-CF-001)
+    cache_peer (DE-AC-001)
+  end note
+fork again
+  :Рендеринг squid.conf
+  (upstream tier);
+  note right
+    ACL IP (DE-AC-001)
+    Параметры (DE-CF-001)
+  end note
+fork again
+  :Рендеринг mtg.toml;
+  note right
+    Secret (DE-SC-001)
+    Параметры (DE-CF-001)
+  end note
+fork again
+  :Рендеринг keepalived.conf;
+  note right
+    Password (DE-SC-001)
+    Параметры (DE-CF-001)
+  end note
+end fork
+:Перезапуск сервисов (handlers);
+
+|Squid|
+:Обработка CONNECT-запросов;
+:Проверка учётных данных
+(DE-CR-001: passwd);
+:Фильтрация по доменам
+(DE-DM-001: ACL);
+:Запись в access.log
+(DE-LG-001);
+
+|CrowdSec|
+:Чтение access.log
+(acquisition, tail mode);
+:Анализ событий
+(parsers + scenarios);
+if (Угроза обнаружена?) then (да)
+  :Решение о блокировке
+  (ban IP);
+  :Обновление nftables
+  (bouncer → crowdsec-blacklists);
+else (нет)
+  :Продолжение мониторинга;
+endif
+
+|logrotate|
+:Ротация access.log
+(ежедневно);
+:Удаление архивов
+по TTL;
+
+stop
+
+@enduml

@@ -1,0 +1,43 @@
+@startuml ADR-000005-mtproxy-flow
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title MTProxy fake-TLS маскировка и маршрутизация\n(двухуровневая архитектура)
+
+actor "Telegram\nклиент" as client
+box "Access node (РФ)" #E3F2FD
+  participant "nginx SNI Router\n:443" as access_nginx
+  participant "TLS Relay\n:9443" as tls_relay
+end box
+participant "DPI" as dpi #FFCDD2
+box "Upstream node (за рубежом)" #E8F5E9
+  participant "nginx SNI Router\n:443" as upstream_nginx
+  participant "mtg daemon\n:2083" as mtg
+end box
+participant "Telegram DC" as tg
+
+== Подключение клиента ==
+
+client -> dpi : TLS ClientHello\nSNI: example.gov.ru
+note right of dpi : DPI видит легитимный\nTLS к example.gov.ru\n→ пропускает
+dpi -> access_nginx : TLS :443
+access_nginx -> access_nginx : ssl_preread\nSNI = example.gov.ru\n→ map: aiproxy_mtproxy
+access_nginx -> tls_relay : proxy_pass :9443\n(PROXY protocol)
+tls_relay -> tls_relay : proxy_ssl on\nTLSv1.3\nproxy_ssl_name:\ntgproxy.example.com
+tls_relay -> upstream_nginx : TLS 1.3 :443\n(к upstream backends)
+
+== Upstream node ==
+
+upstream_nginx -> upstream_nginx : ssl_preread\nSNI = tgproxy.example.com\n→ map: aiproxy_mtproxy
+upstream_nginx -> mtg : proxy_pass :2083\n(PROXY protocol)
+mtg -> mtg : Декапсуляция\nfake-TLS → MTProto
+mtg -> tg : MTProto\n(к Telegram DC)
+tg --> mtg : Ответ MTProto
+mtg --> upstream_nginx : fake-TLS ответ
+upstream_nginx --> tls_relay : TLS 1.3 ответ
+tls_relay --> access_nginx : ответ
+access_nginx --> client : TLS ответ
+
+@enduml

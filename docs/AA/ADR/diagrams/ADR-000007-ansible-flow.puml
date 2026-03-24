@@ -1,0 +1,70 @@
+@startuml ADR-000007-ansible-flow
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Ansible — поток выполнения playbook
+
+|DevOps-инженер|
+start
+:ansible-playbook\n-i inventory.yml playbook.yml;
+
+|Ansible Controller|
+:Чтение inventory.yml\n(группы, хосты, переменные);
+:Чтение playbook.yml\n(hosts: all, inline tasks + roles);
+
+fork
+  |access_proxies|
+  :SSH к access-01, access-02;
+  :Inline tasks: Squid;
+  note right
+    Рендеринг squid-access.conf.j2
+    Копирование passwd (htpasswd)
+    Reload или Restart Squid
+  end note
+  :Inline tasks: Keepalived;
+  note right
+    Шаблон keepalived.conf.j2
+    (при enable_keepalived)
+  end note
+  :Роль: crowdsec;
+  :Роль: nginx;
+  note right
+    SNI Router (00-sni-router.conf.j2)
+    Upstreams (10-aiproxy-upstreams.conf.j2)
+    SNI map (sni-map.d/aiproxy.conf.j2)
+    Деплой squid.conf (при mtproxy_enabled)
+  end note
+  :Handlers: Restart Keepalived,\nRestart nftables, Reload sshd;
+
+fork again
+  |upstreams|
+  :SSH к upstream-de-fn01,\nupstream-fi-av01;
+  :Inline tasks: Squid;
+  note right
+    Рендеринг squid-upstream.conf.j2
+    ACL: access_proxies src IPs
+    forwarded_for delete
+  end note
+  :Inline tasks: Firewall;
+  note right
+    nftables (Debian) / ufw (Ubuntu)
+    / iptables (RHEL)
+  end note
+  :Роль: crowdsec;
+  :Роль: mtproxy;
+  note right
+    mtg.toml.j2, mtg.service
+    nginx TLS termination
+    (nginx-mtproxy-stream.conf.j2)
+  end note
+  :Handlers: Restart nftables,\nReload nginx, Restart mtg;
+
+end fork
+
+|Ansible Controller|
+:Отчёт: ok / changed / failed;
+stop
+
+@enduml

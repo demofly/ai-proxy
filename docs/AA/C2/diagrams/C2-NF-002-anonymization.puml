@@ -1,0 +1,36 @@
+@startuml C2-NF-002-anonymization
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Анонимизация заголовков и firewall (upstream-уровень)
+
+actor "Клиент" as client
+participant "Squid Access\n(РФ)" as access
+participant "nftables\n(upstream)" as nft
+participant "Squid Upstream\n(вне РФ)" as upstream
+participant "AI API\n(OpenAI, Anthropic)" as api
+
+== Firewall: проверка источника ==
+
+access -> nft : TCP SYN :443\nот IP access-прокси
+nft -> nft : Проверка src IP\nпротив access_proxy_ips
+note right : ip saddr { <access_ips> } accept\nвсе остальные → drop
+nft -> upstream : ACCEPT
+
+== Анонимизация заголовков ==
+
+access -> upstream : CONNECT api.anthropic.com:443\nX-Forwarded-For: <client_ip>\nVia: 1.1 access-proxy
+
+upstream -> upstream : forwarded_for off\nvia off\nrequest_header_access:\n  X-Forwarded-For deny all\n  Via deny all\n  X-Real-IP deny all
+
+upstream -> api : CONNECT api.anthropic.com:443\n(без X-Forwarded-For)\n(без Via)\n(без идентификации прокси)
+
+note over api : AI API видит только\nIP upstream-ноды
+
+api --> upstream : Ответ
+upstream --> access : Ответ
+access --> client : Ответ
+
+@enduml

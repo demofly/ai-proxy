@@ -1,0 +1,40 @@
+@startuml ADR-000003-sni-routing
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title SNI-маршрутизация через nginx stream (L4)\n(access node)
+
+participant "Входящее\nTLS-соединение\n:443" as tls
+participant "nginx stream\n(ssl_preread)" as nginx
+participant "Squid Access\n127.0.0.1:3128" as squid
+participant "TLS Relay\n127.0.0.1:9443" as relay
+
+tls -> nginx : TLS ClientHello\n(SNI: api.anthropic.com)
+nginx -> nginx : ssl_preread on\n$ssl_preread_server_name\n= "api.anthropic.com"
+nginx -> nginx : map lookup:\ndefault → fallback_squid
+nginx -> squid : proxy_pass fallback_squid\n(PROXY protocol,\nбез расшифровки TLS)
+
+note over nginx, squid : End-to-end TLS сохраняется
+
+== Пример: Telegram (fake-TLS) ==
+
+tls -> nginx : TLS ClientHello\n(SNI: example.gov.ru)
+nginx -> nginx : ssl_preread on\n$ssl_preread_server_name\n= "example.gov.ru"
+nginx -> nginx : map lookup:\nexample.gov.ru → aiproxy_mtproxy
+nginx -> relay : proxy_pass aiproxy_mtproxy\n(→ TLS relay :9443)
+
+note over relay
+  TLS relay оборачивает поток
+  в TLS 1.3 (proxy_ssl on) и
+  пересылает на upstream :443
+end note
+
+== Пример: default (неизвестный SNI) ==
+
+tls -> nginx : TLS ClientHello\n(SNI: unknown.com)
+nginx -> nginx : map lookup:\ndefault → fallback_squid
+nginx -> squid : proxy_pass fallback_squid
+
+@enduml

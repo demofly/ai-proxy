@@ -1,0 +1,128 @@
+@startuml C4-PB-001-deployment-flow
+!theme plain
+skinparam ActivityDiamondFontSize 11
+skinparam ActivityFontSize 12
+skinparam NoteBackgroundColor #FEFECE
+skinparam PartitionBackgroundColor #F5F5F5
+
+title Поток развёртывания AI Assistants Proxy (playbook.yml)
+
+start
+
+partition "Подготовка системы" {
+  :Удаление ненужных пакетов
+  (packagekit, multipath-tools);
+  :Настройка SSH (UseDNS no);
+  :Установка базовых утилит
+  (mc, haveged);
+}
+
+partition "Ресурсные лимиты" {
+  :Вычисление лимитов
+  на основе CPU и RAM;
+  note right
+    fd_limit = max(vCPU * 4096, 65535)
+    queue_limit = max(vCPU * 8192, 65535)
+    socket_buffer = RAM/5/20
+  end note
+  :Настройка ulimit
+  (/etc/security/limits.d/);
+  :Настройка sysctl
+  (сеть, буферы, очереди);
+}
+
+partition "Squid" {
+  :Установка Squid;
+  :Systemd override
+  (LimitNOFILE);
+
+  :Автоопределение nginx на порту 443;
+
+  if (proxy_role?) then (access)
+    if (mtproxy_enabled?) then (нет)
+      :Деплой squid-access.conf.j2;
+    else (да)
+      :Конфиг деплоится ролью nginx
+      (с rollback);
+    endif
+  else (upstream)
+    :Деплой squid-upstream.conf.j2;
+  endif
+
+  :Сравнение критических параметров
+  (http_port, cache_dir);
+
+  if (Параметры изменились?) then (да)
+    :Restart Squid;
+  else (нет)
+    if (Конфиг изменился?) then (да)
+      :Reload Squid;
+    else (нет)
+    endif
+  endif
+
+  if (proxy_role == access AND enable_auth?) then (да)
+    :Деплой файла паролей;
+  endif
+
+  if (proxy_role == access AND enable_caching?) then (да)
+    :Инициализация кеша (squid -z);
+  endif
+}
+
+partition "Firewall (upstream)" {
+  if (proxy_role?) then (upstream)
+    if (UFW активен?) then (да)
+      :Настройка UFW
+      (allow SSH + Squid от access);
+    elseif (Debian?) then (да)
+      :Деплой nftables-upstream.conf.j2
+      (default drop + whitelist);
+    else (RHEL/другие)
+      :Настройка iptables
+      (кастомная цепочка SQUID-PROXY);
+    endif
+  else (access)
+  endif
+}
+
+partition "Keepalived (access)" {
+  if (proxy_role == access AND\nenable_keepalived AND\nkeepalived_vip определён?) then (да)
+    :Установка Keepalived;
+    :Деплой keepalived.conf.j2;
+    :Включение ip_nonlocal_bind;
+    :Запуск Keepalived;
+  else (нет)
+  endif
+}
+
+partition "CrowdSec IPS" {
+  if (crowdsec_enabled?) then (да)
+    :Включение роли CrowdSec
+    (репозиторий, пакеты,
+    коллекции, acquisition);
+  else (нет)
+  endif
+}
+
+partition "nginx SNI (access)" {
+  if (proxy_role == access AND\nnginx_on_443?) then (да)
+    :Включение роли nginx
+    (SNI router, upstreams,
+    Squid -> localhost);
+  else (нет)
+  endif
+}
+
+partition "MTProxy (upstream)" {
+  if (proxy_role == upstream AND\nmtproxy_enabled?) then (да)
+    :Включение роли MTProxy
+    (mtg binary, секрет,
+    конфиг, firewall);
+  else (нет)
+  endif
+}
+
+stop
+
+@enduml

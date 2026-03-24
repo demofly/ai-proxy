@@ -1,0 +1,53 @@
+@startuml ADR-000001-context
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Контекст решения: Двухуровневая архитектура проксирования
+
+' --- Problem Context ---
+rectangle "Проблема" as problem #FFEBEE {
+  card "AI API ограничивают\nдоступ из РФ\n(гео-блокировки)" as p1
+  card "Необходимы аутентификация,\nаудит и контроль доступа\nна территории РФ" as p2
+  card "Требуется анонимность\nисходящих запросов\n(без раскрытия внутренних IP)" as p3
+}
+
+' --- Decision ---
+rectangle "Решение: Двухуровневая архитектура" as decision #E8F5E9 {
+
+  rectangle "Access Tier (РФ)" as access #C8E6C9 {
+    card "Squid Access\n- Аутентификация\n- Фильтрация\n- Логирование\n- Кеширование" as sa
+    card "Keepalived\n- VRRP failover\n- VIP" as ka
+    card "CrowdSec\n- IPS" as cs
+  }
+
+  rectangle "Upstream Tier (вне РФ)" as upstream #BBDEFB {
+    card "Squid Upstream\n- Анонимный транзит\n- Без логирования\n- Без аутентификации" as su
+  }
+
+  sa -[#1565C0]-> su : cache_peer\n(cascading)
+}
+
+' --- Alternatives ---
+rectangle "Отклонённые альтернативы" as alternatives #FFF3E0 {
+  card "VPN-туннель\n(сложность, overhead)" as alt1 #FFE0B2
+  card "Одноуровневый прокси\n(нет анонимности\nили контроля)" as alt2 #FFE0B2
+  card "SOCKS-прокси\n(нет HTTP-специфичных\nвозможностей)" as alt3 #FFE0B2
+}
+
+' --- External ---
+actor "Клиент (РФ)" as client
+cloud "AI API\n(вне РФ)" as api
+
+' --- Connections ---
+p1 -[#C62828]-> decision
+p2 -[#C62828]-> decision
+p3 -[#C62828]-> decision
+
+client -[#2E7D32]-> sa : HTTP CONNECT\n(аутентификация)
+su -[#1565C0]-> api : HTTPS\n(анонимный)
+
+alternatives -[#BF360C]-> decision : отклонены
+
+@enduml

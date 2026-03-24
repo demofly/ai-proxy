@@ -1,0 +1,47 @@
+@startuml C1-BC-001-context
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName "DejaVu Sans"
+
+title Контекстная диаграмма AI Assistants Proxy
+
+actor "Инженер-\nразработчик" as engineer
+actor "DevOps-\nинженер" as devops
+actor "Telegram-\nпользователь" as tguser
+
+package "AI Assistants Proxy" as system {
+  rectangle "Access Proxy\n(РФ)" as access #LightBlue
+  rectangle "Upstream Proxy\n(вне РФ)" as upstream #LightGreen
+  rectangle "MTProxy\n(mtg, upstream)" as mtproxy #LightYellow
+  rectangle "Ansible\nDeployment" as ansible #LightGray
+}
+
+cloud "AI API" as aiapi {
+  rectangle "Anthropic\n(Claude)" as claude
+  rectangle "OpenAI\n(ChatGPT)" as chatgpt
+  rectangle "Google\n(Gemini)" as gemini
+  rectangle "GitHub\n(Copilot)" as copilot
+  rectangle "xAI, Cursor,\nDeepL, Alibaba..." as others
+}
+
+cloud "Инфраструктура" as infra {
+  rectangle "DNS\n(Quad9, Google,\nCloudflare)" as dns
+  rectangle "CrowdSec\nCentral API" as crowdsec
+  rectangle "Telegram DC" as tgdc
+}
+
+engineer --> access : HTTPS\n(Basic Auth)
+devops --> ansible : SSH\n(Ansible)
+tguser --> access : TLS\n(fake-TLS)
+
+access --> upstream : HTTPS\n(userhash)
+access --> upstream : TLS relay\n(nginx SNI → MTProxy)
+upstream --> aiapi : HTTPS\n(анонимно)
+upstream --> dns : DNS queries
+access --> crowdsec : Threat\nintelligence
+mtproxy --> tgdc : MTProto
+
+ansible --> access : Конфигурация
+ansible --> upstream : Конфигурация
+
+@enduml

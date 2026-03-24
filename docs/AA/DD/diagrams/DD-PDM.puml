@@ -1,0 +1,130 @@
+@startuml DD-PDM
+!theme plain
+skinparam linetype ortho
+skinparam padding 4
+skinparam defaultFontName "Segoe UI"
+
+title Физическая модель данных (PDM)\nAI Assistants Proxy
+
+package "Access Proxy (РФ)" as access_tier {
+  entity "/etc/squid/passwd" as passwd {
+    * формат: htpasswd (NCSA)
+    --
+    user:$apr1$salt$hash
+    ..
+    права: 640 (root:proxy)
+    кодировка: ASCII
+  }
+
+  entity "/etc/squid/squid.conf" as squid_conf_access {
+    * формат: Squid конфигурация
+    --
+    acl allowed_domains dstdomain ...
+    acl allowed_domain_patterns dstdom_regex ...
+    auth_param basic program ncsa_auth
+    cache_peer <upstream> parent 80
+    access_log squid (native format)
+    ..
+    права: 644 (root:proxy)
+    генерируется: Jinja2 шаблон
+  }
+
+  entity "/var/log/squid/access.log" as access_log {
+    * формат: Squid native logformat squid
+    --
+    timestamp duration client_ip status
+    bytes method url username hierarchy
+    ..
+    права: 640 (proxy:proxy)
+    ротация: logrotate
+  }
+
+  entity "/etc/nginx/stream.d/*.conf" as nginx_access {
+    * формат: nginx stream config
+    --
+    00-sni-router.conf (ssl_preread)
+    10-aiproxy-upstreams.conf
+    sni-map.d/aiproxy.conf
+    ..
+    права: 644 (root:root)
+    генерируется: Jinja2 шаблоны
+  }
+
+  entity "/etc/keepalived/keepalived.conf" as keepalived_conf {
+    * формат: Keepalived конфигурация
+    --
+    vrrp_instance: state, priority, VIP
+    auth: PASS <password>
+    ..
+    права: 640 (root:root)
+    генерируется: Jinja2 шаблон
+  }
+}
+
+package "Upstream Proxy (вне РФ)" as upstream_tier {
+  entity "/etc/squid/squid.conf" as squid_conf_upstream {
+    * формат: Squid конфигурация
+    --
+    acl access_proxies src <IP1> <IP2>
+    http_access allow access_proxies
+    ..
+    права: 644 (root:proxy)
+    генерируется: Jinja2 шаблон
+  }
+
+  entity "/etc/mtproxy/mtg.toml" as mtg_toml {
+    * формат: TOML
+    --
+    secret = "<hex>"
+    bind-to = "127.0.0.1:2083"
+    ..
+    права: 640 (root:mtproxy)
+    генерируется: Jinja2 шаблон
+  }
+
+  entity "/etc/nginx/stream.d/*.conf" as nginx_upstream {
+    * формат: nginx stream config
+    --
+    00-sni-router.conf (ssl_preread)
+    nginx-mtproxy-stream.conf
+    sni-map.d/mtproxy.conf
+    ..
+    права: 644 (root:root)
+    генерируется: Jinja2 шаблоны
+  }
+
+  entity "UFW Firewall" as ufw_upstream {
+    * формат: UFW rules
+    --
+    table ip filter (UFW managed)
+    default deny incoming
+    whitelist: SSH, Squid :80, MTProxy :443
+    ..
+    права: управляется UFW
+    генерируется: Ansible tasks
+  }
+}
+
+package "Управляющий хост (Ansible)" as ansible_host {
+  entity "inventory.yml" as inventory {
+    * формат: YAML
+    --
+    all.children.access_proxies.hosts
+    all.children.upstreams.hosts
+    all.vars: конфигурационные параметры
+    ..
+    источник истины для всех
+    конфигурационных данных
+  }
+}
+
+inventory --> squid_conf_access : "Jinja2 render"
+inventory --> squid_conf_upstream : "Jinja2 render"
+inventory --> keepalived_conf : "Jinja2 render"
+inventory --> mtg_toml : "Jinja2 render"
+inventory --> nginx_access : "Jinja2 render"
+inventory --> nginx_upstream : "Jinja2 render"
+inventory --> ufw_upstream : "Ansible UFW tasks"
+inventory ..> passwd : "htpasswd CLI"
+
+@enduml
