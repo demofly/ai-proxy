@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# Whitelist infrastructure IPs — prevent CrowdSec from banning our own nodes
+name: crowdsecurity/whitelist-infrastructure
+description: "Whitelist access and upstream proxy IPs"
+whitelist:
+  reason: "Infrastructure node — part of proxy cluster"
+  ip:
+{% for host in groups['access_proxies'] %}
+    - "{{ hostvars[host]['ansible_host'] }}"
+{% endfor %}
+{% for host in groups['upstreams'] %}
+    - "{{ hostvars[host]['ansible_host'] }}"
+{% endfor %}

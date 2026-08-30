@@ -1,0 +1,41 @@
+@startuml C1-BC-004-value-stream
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName "DejaVu Sans"
+
+title Потоки ценности AI Assistants Proxy
+
+|Инженер|
+start
+:Настройка прокси в IDE\n(однократно);
+
+|Инженер|
+:Запрос к AI-ассистенту\n(Claude / Copilot / Gemini);
+
+|Access Proxy (РФ)|
+:Аутентификация\n(Basic Auth);
+:Проверка домена\n(whitelist);
+:Журналирование\nобращения;
+if (Кеш актуален?) then (да)
+  :Возврат из кеша;
+else (нет)
+  |Upstream Proxy (вне РФ)|
+  :Анонимизация\n(удаление заголовков);
+  :Пересылка запроса\nк AI API;
+
+  |AI API|
+  :Обработка запроса;
+  :Возврат ответа;
+
+  |Upstream Proxy (вне РФ)|
+  :Трансляция ответа;
+endif
+
+|Access Proxy (РФ)|
+:Доставка ответа\nинженеру;
+
+|Инженер|
+:Получение результата\nв IDE;
+stop
+
+@enduml

@@ -1,0 +1,157 @@
+# [AITS] 2026-08-30T16:55:28Z
+# Конфигурация Squid — upstream-уровень. Версия ставится из репозитория ОС и здесь
+# не фиксируется; проверялась на 6.x.
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# Host: {{ inventory_hostname }} ({{ ansible_host }})
+# Анонимный транспорт для access прокси
+
+# Не кешировать негативные ответы (4xx, 5xx)
+negative_ttl 0 seconds
+
+{% if enable_caching %}
+# Кеширование (для HTTP запросов)
+{% if cpu_cores | int > 1 %}
+cache_dir ufs /var/spool/squid/${process_number} 100 16 256
+{% else %}
+cache_dir ufs /var/spool/squid 100 16 256
+{% endif %}
+maximum_object_size 50 MB
+{% else %}
+# Кеширование отключено
+cache deny all
+{% endif %}
+
+{% if enable_logging %}
+# Журналирование
+access_log daemon:/var/log/squid/access.log squid
+cache_log /var/log/squid/cache.log
+{% else %}
+# Журналирование выключено
+access_log none
+cache_log /dev/null
+{% endif %}
+
+# ACL: только IP access прокси
+{% for host in groups['access_proxies'] %}
+acl access_proxy src {{ hostvars[host]['ansible_host'] }}
+{% endfor %}
+
+{% if nginx_on_443 | default(false) %}
+# За nginx SNI router: слушаем на localhost с PROXY protocol
+# nginx:443 делает SNI routing и передаёт реальный IP через PROXY protocol
+http_port 127.0.0.1:{{ squid_local_port | default(3128) }} require-proxy-header
+acl localhost_pp src 127.0.0.1
+proxy_protocol_access allow localhost_pp
+proxy_protocol_access deny all
+{% else %}
+# Порт — Squid слушает напрямую (nginx не активен)
+{% if squid_transit_tls | default(false) | bool %}
+# Приём участка от access ПОД ШИФРОВАНИЕМ. Заголовок CONNECT — а с ним имя
+# целевого сервиса — недоступен наблюдателю между узлами; прежде он шёл
+# открытым текстом, и адресат обращения был виден, хотя содержимое защищено
+# сквозным шифрованием клиента с сервисом.
+https_port {{ squid_port }} tls-cert=/etc/squid/transit.crt tls-key=/etc/squid/transit.key
+{% else %}
+http_port {{ squid_port }}
+{% endif %}
+{% endif %}
+
+# Порт управления: снятие показателей службы (обращения, попадания в кеш, состояние
+# вышестоящих узлов). Отдельный порт нужен потому, что рабочий порт непригоден для этого
+# ни в одном режиме: за маршрутизатором он требует заголовок протокола PROXY, а при
+# шифровании участка принимает только TLS. Слушатель привязан к петлевому адресу,
+# поэтому снаружи недостижим независимо от правил межсетевого экрана.
+http_port 127.0.0.1:{{ squid_mgmt_port | default(3129) }}
+
+# Доступ к менеджеру: только с самого узла и только к запросам менеджера.
+# Порядок значим — разрешение стоит выше общего запрета, а запрет менеджера
+# для прочих источников выпускается сразу за ним.
+acl mgmt_local src 127.0.0.1/32 ::1
+http_access allow manager mgmt_local
+http_access deny manager
+
+# Правила доступа
+http_access allow access_proxy
+http_access deny all
+
+# Анонимность
+forwarded_for off
+via off
+
+request_header_access X-Forwarded-For deny all
+request_header_access Via deny all
+request_header_access X-Real-IP deny all
+
+# Подмена User-Agent на постоянную строку.
+# Прежняя редакция собиралась из свойств узла — дистрибутива, системы,
+# архитектуры, — то есть при срабатывании РАСКРЫВАЛА сведения об узле вместо
+# их сокрытия, и вдобавок объявляла оконную систему X11, к подставляемым
+# свойствам не относящуюся. Строка постоянна и совпадает с access-уровнем:
+# два узла цепочки не должны различаться подставляемым значением.
+request_header_access User-Agent deny all
+request_header_replace User-Agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.405 Safari/537.36"
+
+reply_header_access Via deny all
+reply_header_access X-Cache deny all
+
+# Размеры памяти — доля предела cgroup для службы ({{ mem_squid_mb | default(64) }} MB).
+# Upstream не кеширует объекты, поэтому cache_mem не задаётся, а пулы
+# внутренних структур ограничены половиной предела.
+{% set squid_limit_mb = mem_squid_mb | default(64) | int %}
+{% set pools_mb = (squid_limit_mb * 0.5) | int %}
+# Пулы внутренних структур: {{ pools_mb }} MB (50% предела)
+memory_pools_limit {{ pools_mb }} MB
+
+# Таймауты
+connect_timeout 15 seconds
+# read_timeout — единственный предел ПРОСТОЯ туннеля CONNECT: таймер переармируется
+# при любой передаче данных в любую сторону и действует на обе стороны туннеля.
+# Это второй экземпляр того же простойного таймера в цепочке (access → upstream):
+# наименьший из таймеров цепочки решает исход, поэтому значение здесь равно
+# значению на access-узле — предел бездействия по требованию владельца, 1 час.
+# Вторая роль величины — терпимость к длинным ответам AI API (может «думать» 10+ минут).
+# Умолчание задано часом, чтобы развёртывание без переменной инвентори
+# не давало более короткого предела.
+read_timeout {{ read_timeout | default('1 hour') }}
+# client_lifetime — абсолютный предел жизни клиентского соединения. Он обязан быть
+# строго БОЛЬШЕ read_timeout, иначе рвать соединение будет он, и предел простоя
+# перестанет что-либо значить: активный туннель погибнет наравне с бездействующим.
+# Прежде директива здесь отсутствовала и инвариант держался лишь встроенным
+# умолчанием Squid (1 day) — то есть молча порвался бы при read_timeout свыше суток.
+client_lifetime {{ client_lifetime | default('1 day') }}
+request_timeout 30 seconds
+shutdown_lifetime 3 seconds
+
+# SMP - использование всех ядер CPU
+{% set cpu_cores = ansible_processor_vcpus | default(1) %}
+{% if cpu_cores > 1 %}
+# Предел числа дескрипторов наблюдаем в конфигурации, а не только в окружении.
+max_filedescriptors {{ fd_limit | default(65535) }}
+
+workers {{ cpu_cores }}
+{% endif %}
+
+# Persistent connections - переиспользование соединений
+client_persistent_connections on
+server_persistent_connections on
+
+# Pipelining - параллельная обработка запросов
+pipeline_prefetch 10
+
+# Quick abort - быстрое освобождение ресурсов при отмене
+quick_abort_min 0 KB
+quick_abort_max 0 KB
+quick_abort_pct 100
+
+# ICP отключен
+icp_port 0
+
+# DNS
+dns_nameservers 127.0.0.1
+dns_retransmit_interval 2 seconds
+dns_timeout 15 seconds
+positive_dns_ttl {{ squid_positive_dns_ttl | default('6 hours') }}
+negative_dns_ttl {{ squid_negative_dns_ttl | default('30 seconds') }}
+
+# Буферизация логов для снижения I/O
+buffered_logs on

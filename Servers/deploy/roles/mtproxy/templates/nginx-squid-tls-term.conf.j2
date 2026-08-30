@@ -1,0 +1,47 @@
+# {{ ansible_managed }}
+# [AITS] 2026-08-29T21:59:45Z
+# Squid TLS 1.3 termination for access → upstream transit (stream context)
+#
+# Architecture: SNI router on port 443 (shared with MTProxy/other projects)
+# routes Squid TLS traffic (SNI={{ squid_tls_sni }}) to this local TLS terminator.
+# TLS is terminated here; decrypted HTTP CONNECT forwarded to upstream Squid.
+#
+# PROXY protocol chain:
+#   SNI router (proxy_protocol on) → TLS terminator (listen proxy_protocol)
+#   → TLS terminator (proxy_protocol on) → Squid (require-proxy-header)
+#   nginx forwards PP-parsed src_addr, preserving the original access node IP.
+
+# Цель маршрутизатора: сюда он направляет соединения с именем участка в SNI.
+# Порт слушает терминатор ниже; расшифрованный поток он передаёт Squid.
+upstream squid_tls_term {
+    server 127.0.0.1:{{ squid_tls_term_port | default(4444) }};
+}
+
+server {
+    listen 127.0.0.1:{{ squid_tls_term_port | default(4444) }} ssl proxy_protocol;
+
+    # Материал участка, а НЕ материал MTProxy: имя в сертификате MTProxy
+    # (mtproxy-transit) не совпадает с именем участка, и проверка подлинности
+    # на стороне access отвергла бы соединение. Два механизма делят порт 443
+    # и маршрутизатор, но не удостоверяющий материал.
+    ssl_certificate     /etc/nginx/ssl/squid-transit.crt;
+    ssl_certificate_key /etc/nginx/ssl/squid-transit.key;
+    ssl_protocols       TLSv1.3;
+
+    proxy_pass 127.0.0.1:{{ squid_local_port | default(3128) }};
+
+    # Re-inject PROXY protocol for upstream Squid (require-proxy-header)
+    # nginx stream forwards the PP-parsed src_addr (access node IP), not 127.0.0.1
+    proxy_protocol on;
+
+    # Тайминги: предел простоя маршрутизатора заведомо ВЫШЕ предела Squid,
+    # чтобы бездействующее соединение рвал Squid, а не маршрутизатор. Squid
+    # держит read_timeout 1 час (3600 с), запас 300 с покрывает расхождение
+    # моментов, когда каждое звено засекает последнюю передачу данных.
+    # При подъёме read_timeout выше 3600 с это значение поднимается следом.
+    proxy_connect_timeout 10s;
+    proxy_timeout 3900s;
+
+    # TCP keepalive: detect dead peers via kernel probes
+    proxy_socket_keepalive on;
+}

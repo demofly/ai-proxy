@@ -1,0 +1,86 @@
+@startuml C2-FR-001-proxy-flow
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+skinparam sequenceMessageAlign center
+
+title Поток проксирования запроса к AI API
+
+actor "Клиент\n(IDE / CLI / Браузер)" as Client
+participant "Keepalived\nVIP" as VIP
+box "Access tier (РФ)" #E8F5E9
+  participant "nginx\nмаршрутизатор :443" as AccessRouter
+  participant "Squid\nAccess-прокси" as AccessProxy
+end box
+box "Upstream tier (за рубежом)" #E3F2FD
+  participant "nginx\nмаршрутизатор :443" as UpstreamRouter
+  participant "nginx\nтерминатор TLS :4444" as UpstreamTerm
+  participant "Squid\nUpstream-прокси" as UpstreamProxy
+end box
+participant "AI API\n(Claude / GPT / Gemini)" as AIAPI
+
+== Установление CONNECT-туннеля ==
+
+Client -> VIP : CONNECT api.anthropic.com:443
+VIP -> AccessRouter : (виртуальный адрес —\nвозможность необязательная,\nпо умолчанию выключена)
+
+AccessRouter -> AccessProxy : бэкенд по умолчанию\n(петлевой порт, заголовок PROXY)
+AccessProxy -> AccessProxy : Аутентификация\n(basic_ncsa_auth)
+
+alt Аутентификация не пройдена
+  AccessProxy --> Client : HTTP 407\nProxy Authentication Required
+else Аутентификация пройдена
+  AccessProxy -> AccessProxy : Проверка ACL\n(dstdomain / dstdom_regex)
+
+  alt Домен не в whitelist
+    AccessProxy --> Client : HTTP 403 Forbidden
+    AccessProxy -> AccessProxy : Запись в access.log\n(DENIED)
+  else Домен разрешён
+    AccessProxy -> AccessProxy : Запись в access.log\n(username, domain, peer)\nи в журнал маршрутизации\n(адрес клиента, имя SNI, назначение)
+    AccessProxy -> AccessProxy : Выбор upstream\n(userhash по username)
+    alt Участок шифруется (squid_transit_tls)
+      AccessProxy -> UpstreamRouter : TLS с именем transit.internal в SNI,\nвнутри — CONNECT api.anthropic.com:443
+      note right of AccessProxy
+        Проверка принимающей стороны обязательна:
+        доверенный якорь — единственный сертификат
+        участка, системные УЦ отсечены.
+      end note
+      UpstreamRouter -> UpstreamTerm : по имени из карты SNI
+      UpstreamTerm -> UpstreamProxy : снятый TLS,\nадрес клиента протоколом PROXY
+    else Участок открыт
+      AccessProxy -> UpstreamRouter : CONNECT api.anthropic.com:443\n(имя сервиса видно наблюдателю)
+      UpstreamRouter -> UpstreamProxy : бэкенд по умолчанию\n(петлевой порт)
+    end
+
+    UpstreamProxy -> UpstreamProxy : Проверка адреса источника\n(правила экрана: UFW,\nnftables либо iptables)
+
+    alt IP не в списке access-прокси
+      UpstreamProxy --> AccessProxy : Connection refused
+      AccessProxy --> Client : HTTP 503\nService Unavailable
+    else IP разрешён
+      UpstreamProxy -> UpstreamProxy : Анонимизация заголовков\n(forwarded_for off, via off,\nзапрет пересылки X-Forwarded-For и Via)
+      UpstreamProxy -> AIAPI : CONNECT → TLS Handshake
+
+      AIAPI --> UpstreamProxy : TLS Established
+      UpstreamProxy --> AccessProxy : HTTP 200\nConnection Established
+      AccessProxy --> Client : HTTP 200\nConnection Established
+
+      == Передача данных (TLS-туннель) ==
+
+      Client <-> AccessProxy : Зашифрованный трафик
+      AccessProxy <-> UpstreamProxy : Зашифрованный трафик\n(при squid_transit_tls — внутри TLS участка,\nчерез терминатор)
+      UpstreamProxy <-> AIAPI : Зашифрованный трафик
+
+      note over Client, AIAPI
+        Сквозное шифрование: прокси не видят содержимое запросов.
+        Туннель рвётся по ПРОСТОЮ: read_timeout 1 час, таймер
+        переармируется при каждой передаче — активный обмен
+        не прерывается никогда. Маршрутизатор рвёт позже Squid
+        (3900 с), чтобы предел задавал именно Squid.
+      end note
+    end
+  end
+end
+
+@enduml

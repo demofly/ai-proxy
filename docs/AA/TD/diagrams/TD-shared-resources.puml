@@ -1,0 +1,101 @@
+@startuml TD-shared-resources
+' Совместное владение ресурсами узла: кто пишет в общие файлы и чем это кончается.
+' Цвет обозначает класс совместного владения, а не важность ресурса.
+skinparam defaultFontName Verdana
+skinparam defaultFontSize 12
+skinparam shadowing false
+skinparam rectangle {
+  BackgroundColor<<agreed>> #E8F5E9
+  BackgroundColor<<separate>> #E3F2FD
+  BackgroundColor<<led>> #E1F5FE
+  BackgroundColor<<oneway>> #FFF8E1
+  BorderColor #607D8B
+}
+skinparam legend {
+  BackgroundColor #FAFAFA
+  BorderColor #B0BEC5
+}
+
+title Общие ресурсы узла при совместном размещении
+
+package "Проект ai-proxy" as AP #F5F5F5 {
+  rectangle "роль nginx" as APN
+  rectangle "роль mtproxy" as APM
+  rectangle "плейбук" as APP
+}
+
+package "Проект Matrix" as MX #F5F5F5 {
+  rectangle "роль nginx" as MXN
+  rectangle "роль common" as MXC
+}
+
+package "Ресурсы узла" as RES {
+  rectangle "nginx.conf:\nблок stream" as R_STREAM <<agreed>>
+  rectangle "nginx.conf:\nпределы соединений\nи дескрипторов" as R_LIMITS <<led>>
+  rectangle "stream.d/\n00-sni-router.conf" as R_ROUTER <<led>>
+  rectangle "stream.d/*.conf\nи sni-map.d/*.conf\nпроектов" as R_PARTS <<separate>>
+  rectangle "crowdsec/acquis.d/\n*.yaml" as R_ACQUIS <<separate>>
+  rectangle "Оперативная память\n(доли узла)" as R_MEM <<separate>>
+  rectangle "Межсетевой экран" as R_FW <<led>>
+}
+
+APN --> R_STREAM
+APM --> R_STREAM
+MXN --> R_STREAM
+
+APN --> R_LIMITS : задаёт ведущий
+MXN --> R_LIMITS : уступает
+
+APN --> R_ROUTER : пишет безусловно
+APM --> R_ROUTER : пишет безусловно
+MXN --> R_ROUTER : только если файла нет
+
+APN --> R_PARTS
+MXN --> R_PARTS
+APP --> R_ACQUIS
+MXC --> R_ACQUIS
+APP --> R_MEM
+MXN --> R_MEM
+APP --> R_FW
+MXC --> R_FW
+
+note right of R_ROUTER
+  Ведущий — ai-proxy: пишет
+  без оглядки на найденное.
+  Сосед разворачивает свою
+  редакцию, лишь когда файла
+  нет вовсе, и держит в ней
+  согласованные тайминги
+end note
+
+note right of R_LIMITS
+  Задаёт владелец nginx,
+  и значение покрывает
+  нагрузку ВСЕХ проектов:
+  уступивший сосед восполнить
+  нехватку не может —
+  строка в файле одна
+end note
+
+note bottom of R_MEM
+  Доли объявлены, а не выведены
+  вычитанием: ведущий 35 %,
+  ведомый 50 %, ядру 15 %.
+  Ведомый вправе превысить свою,
+  если неснижаемые пределы того
+  требуют, и предупреждает об этом
+end note
+
+note bottom of R_STREAM
+  Единый маркер,
+  содержимое совпадает
+  дословно — конфликта нет
+end note
+
+legend bottom
+  |<#E8F5E9>| Согласованная запись: содержимое одинаково |
+  |<#E3F2FD>| Раздельная запись: каждый пишет свой файл |
+  |<#E1F5FE>| Ведомая: пишет ведущий, сосед уступает |
+  |<#FFF8E1>| Односторонняя: значение задаёт один за обоих |
+endlegend
+@enduml

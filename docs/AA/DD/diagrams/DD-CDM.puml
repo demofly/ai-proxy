@@ -1,0 +1,65 @@
+@startuml DD-CDM
+!theme plain
+skinparam linetype ortho
+skinparam padding 4
+skinparam defaultFontName "Segoe UI"
+
+title Концептуальная модель данных (CDM)\nAI Assistants Proxy
+
+entity "Пользователь" as User {
+  Учётная запись для доступа
+  к прокси-сервису
+}
+
+entity "Учётные данные" as Credential {
+  Логин и хеш пароля
+  для Basic Auth
+}
+
+entity "Конфигурация" as Config {
+  Параметры inventory.yml
+  для развёртывания
+}
+
+entity "Белый список доменов" as DomainList {
+  Разрешённые домены
+  AI API (exact + regex)
+}
+
+entity "ACL" as ACL {
+  IP-адреса access-прокси
+  для upstream ACL
+}
+
+entity "Секреты" as Secret {
+  MTProxy secret,
+  Keepalived password
+}
+
+entity "Access Proxy" as AccessProxy {
+  Squid на access tier
+  (точка входа)
+}
+
+entity "Записи журнала" as LogRecord {
+  Структурированные записи
+  access.log
+}
+
+entity "CrowdSec" as CrowdSec {
+  IPS: анализ журналов,
+  блокировка угроз
+}
+
+User "1" -- "1" Credential : имеет >
+Config "1" -- "*" DomainList : определяет >
+Config "1" -- "*" ACL : определяет >
+Config "1" -- "*" Secret : содержит >
+AccessProxy "1" -- "*" LogRecord : генерирует >
+LogRecord "*" -- "1" CrowdSec : анализируются >
+User "*" -- "1" AccessProxy : подключается к >
+Credential "*" -- "1" AccessProxy : используется >
+DomainList "*" -- "1" AccessProxy : применяется к >
+ACL "*" -- "1" AccessProxy : ограничивает доступ >
+
+@enduml

@@ -1,0 +1,38 @@
+---
+# [AITS] 2026-08-29T11:04:55Z
+- name: Reload systemd for mtg
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# Вызывается задачей переключения символьной ссылки /usr/local/bin/mtg на
+# выбранную версию: работающий процесс держит прежний inode, и без перезапуска
+# новый бинарник на диске остаётся неработающим. Перезапуск здесь неизбежен —
+# reload для mtg не определён, службу заменяет процесс целиком.
+- name: Restart mtg
+  ansible.builtin.systemd:
+    name: mtg
+    state: restarted
+
+# Демон nginx на узле один, и его перезапуск рвёт соединения всех виртуальных
+# хостов узла сразу, а освобождение занятых портов при рестарте не мгновенно
+# (следующий bind() отказывает). Поэтому применяется только reload — перечитывание
+# конфигурации без разрыва соединений. reset-failed очищает stale job markers
+# от предыдущих неудачных попыток.
+
+- name: Reload nginx for mtproxy
+  ansible.builtin.shell: |
+    systemctl reset-failed nginx 2>/dev/null || true
+    if systemctl is-active --quiet nginx; then
+      systemctl reload nginx
+    else
+      systemctl start nginx
+    fi
+  changed_when: true
+
+# Обработчика перезапуска nftables здесь нет намеренно. Он существовал, но его
+# не вызывала ни одна задача: не применялся, а предлагал себя первому, кто
+# допишет notify. Цена такого вызова велика — ExecStop юнита nftables сбрасывает
+# ruleset узла ЦЕЛИКОМ, включая таблицы CrowdSec bouncer и правила соседних
+# проектов, а восстанавливает только /etc/nftables.conf. Применение правил идёт
+# обработчиком «Reload nftables» в playbook.yml: он загружает файл одной
+# транзакцией, и при ошибке продолжают действовать прежние правила.

@@ -1,0 +1,298 @@
+# [AITS] 2026-08-30T16:55:28Z
+# Конфигурация Squid — access-уровень. Версия ставится из репозитория ОС и здесь
+# не фиксируется; проверялась на 6.x.
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# Host: {{ inventory_hostname }} ({{ ansible_host }})
+
+# Скрывает заголовки проксирования и выглядит как обычный браузер
+
+# Не кешировать негативные ответы (4xx, 5xx)
+negative_ttl 0 seconds
+
+{% if enable_caching %}
+# Кеширование (для HTTP запросов).
+# При многопроцессном режиме (workers > 1) путь разводится по номеру процесса:
+# хранилище ufs совместным доступом нескольких процессов не рассчитано, и общий
+# каталог означал бы порчу индекса. ${process_number} подставляет сам Squid.
+{% if cpu_cores | int > 1 %}
+cache_dir ufs /var/spool/squid/${process_number} 100 16 256
+{% else %}
+cache_dir ufs /var/spool/squid 100 16 256
+{% endif %}
+maximum_object_size 50 MB
+
+# Правила свежести. Порядок значим: применяется первое совпавшее.
+# Ответы API динамические, и решение об их повторном использовании принимает
+# не проект: без явных заголовков ответ не считается свежим ни секунды.
+# Умолчания Squid рассчитаны на статику и дали бы обратное.
+refresh_pattern -i \.(gif|png|jpe?g|ico|svg|css|js|woff2?)$ 1440 20% 10080
+refresh_pattern .                                              0  0%      0
+{% else %}
+# Кеширование отключено
+cache deny all
+{% endif %}
+
+{% if enable_logging %}
+# Журналирование
+access_log daemon:/var/log/squid/access.log squid
+cache_log /var/log/squid/cache.log
+{% else %}
+# Журналирование отключено
+access_log none
+cache_log /dev/null
+{% endif %}
+
+{% if enable_auth %}
+# Настройка аутентификации (ОБЯЗАТЕЛЬНО ПЕРЕД ACL!)
+auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
+auth_param basic children 5 startup=5 idle=1
+auth_param basic realm "Squid Proxy Authentication"
+auth_param basic credentialsttl 2 hours
+auth_param basic casesensitive on
+
+acl authenticated proxy_auth REQUIRED
+{% endif %}
+
+# ACL для разрешённых ресурсов
+# Явный список доменов
+{% for domain in allowed_domains | default([]) %}
+acl allowed_domains dstdomain {{ domain }}
+{% endfor %}
+# Регулярные выражения для доменов (например \.ai$ — все домены зоны .ai)
+{% for pattern in allowed_domain_patterns | default([]) %}
+acl allowed_domain_regexp dstdom_regex -i {{ pattern }}
+{% endfor %}
+
+# HTTP порт
+{% if nginx_on_443 | default(false) %}
+# За nginx SNI router: слушаем на localhost с PROXY protocol
+# nginx передаёт реальный IP клиента через PROXY protocol (HAProxy v1)
+http_port 127.0.0.1:{{ squid_local_port | default(3128) }} require-proxy-header
+acl localhost_pp src 127.0.0.1
+proxy_protocol_access allow localhost_pp
+proxy_protocol_access deny all
+{% else %}
+http_port {{ squid_port }}
+{% endif %}
+
+{% if groups['upstreams'] is defined and groups['upstreams'] | length > 0 %}
+# Upstream прокси с автоматическим failover
+# userhash - выбор пира по хэшу имени пользователя (устойчивая привязка).
+#            Это единственный заданный алгоритм: директива sourcehash не выпускается.
+#            При отказе пира он исключается из кольца, его пользователи уходят на живые.
+# connect-fail-limit=2 - после 2 неудачных попыток пометить как недоступный
+# connect-timeout=5 - таймаут подключения 5 секунд (быстрое обнаружение проблем)
+{% for upstream_host in groups['upstreams'] %}
+{% set upstream = hostvars[upstream_host] %}
+{% if squid_transit_tls | default(false) | bool %}
+{#- Порт зависит от устройства принимающего узла: при включённом MTProxy там
+    работает маршрутизатор по имени SNI и слушает 443, разбирая имя и направляя
+    соединение к терминатору; иначе TLS принимает сам Squid на своём порту. -#}
+{% set transit_port = 443 if (upstream.mtproxy_enabled | default(false) | bool) else upstream.squid_port %}
+{#- tls-cafile задаёт доверенный якорь: сертификат участка, выпущенный развёртыванием.
+    tls-no-default-ca отсекает системные удостоверяющие центры — доверять следует
+    ровно одному сертификату, а не всякому, кем-либо подписанному.
+    tls-domain задаёт имя в SNI и проверяемое имя принимающей стороны. -#}
+cache_peer {{ upstream.ansible_host }} parent {{ transit_port }} 0 no-query userhash tls tls-no-default-ca tls-cafile=/etc/squid/upstream-transit-ca.crt tls-domain={{ squid_tls_sni }} connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
+{% else %}
+{#- Участок не шифруется: содержимое обращений защищено сквозным шифрованием
+    клиента с сервисом, но заголовок CONNECT идёт открытым текстом, и наблюдателю
+    между узлами виден адресат обращения. Включается признаком squid_transit_tls. -#}
+cache_peer {{ upstream.ansible_host }} parent {{ upstream.squid_port }} 0 no-query userhash connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
+{% endif %}
+{% endfor %}
+
+# Время восстановления dead peer (проверять каждые 15 секунд)
+dead_peer_timeout {{ dead_peer_timeout | default('15 seconds') }}
+
+# Отключаем NetDB (не нужен при userhash балансировке)
+netdb_filename none
+
+# Направлять трафик через вышестоящие узлы.
+# never_direct запрещает прямой выход НАСОВСЕМ, поэтому он и есть предмет
+# переменной allow_direct_fallback: пока запрет выпущен, никакой запасной путь
+# невозможен — при отказе всех вышестоящих узлов обращения завершаются ошибкой.
+# Прежде запрет выпускался безусловно, а переменная выпускала prefer_direct off,
+# совпадающий с умолчанием, и потому не меняла ничего.
+#
+# ВЫБОР НЕ ТЕХНИЧЕСКИЙ. Прямой выход с access-узла раскрывает целевому сервису
+# адрес узла в РФ — то самое, ради сокрытия чего построен второй уровень.
+# Поэтому умолчание — запрет: доступность приносится в жертву неразличимости.
+# Запросы к собственному менеджеру обслуживает сама служба, и выход наружу им
+# не нужен. Без этого правила запрет прямых обращений отправлял бы их вышестоящему
+# узлу, тот получал бы обращение к чужому петлевому адресу и отвечал отказом —
+# способ снятия показателей переставал работать именно на том уровне, где он нужнее.
+always_direct allow manager
+
+{% if allow_direct_fallback | default(false) | bool %}
+# Запасной прямой путь РАЗРЕШЁН: при недоступности всех вышестоящих узлов
+# обращение уйдёт напрямую, раскрыв адрес access-узла целевому сервису.
+# Пиры остаются предпочтительными, прямой путь берётся лишь когда живых нет.
+prefer_direct off
+{% else %}
+never_direct allow all
+{% endif %}
+{% endif %}
+
+# Порт управления: снятие показателей службы (обращения, попадания в кеш, состояние
+# вышестоящих узлов). Отдельный порт нужен потому, что рабочий порт непригоден для этого
+# ни в одном режиме: за маршрутизатором он требует заголовок протокола PROXY, а при
+# шифровании участка принимает только TLS. Слушатель привязан к петлевому адресу,
+# поэтому снаружи недостижим независимо от правил межсетевого экрана.
+http_port 127.0.0.1:{{ squid_mgmt_port | default(3129) }}
+
+# Доступ к менеджеру: только с самого узла и только к запросам менеджера.
+# Порядок значим — разрешение стоит выше общего запрета, а запрет менеджера
+# для прочих источников выпускается сразу за ним.
+acl mgmt_local src 127.0.0.1/32 ::1
+http_access allow manager mgmt_local
+http_access deny manager
+
+# Правила доступа
+{% set has_domains = (allowed_domains | default([]) | length > 0) or (allowed_domain_patterns | default([]) | length > 0) %}
+
+{% if enable_auth %}
+{% if has_domains %}
+http_access allow authenticated allowed_domains
+http_access allow authenticated allowed_domain_regexp
+{% else %}
+# Нет ограничений по доменам - разрешаем все аутентифицированным
+http_access allow authenticated
+{% endif %}
+{% else %}
+# Аутентификация отключена (enable_auth: false): ACL authenticated не определён,
+# а доступ без проверки подлинности не предоставляется — отклоняется любой запрос
+# (fail-closed). Единственное разрешающее правило ниже отсутствует намеренно.
+{% endif %}
+
+# Запрещаем все остальное
+http_access deny all
+
+# Отключение передачи информации о прокси
+forwarded_for off
+via off
+
+# Управление заголовками запросов (от клиента к серверу)
+request_header_access X-Forwarded-For deny all
+request_header_access X-Forwarded-Proto deny all
+request_header_access X-Real-IP deny all
+request_header_access X-Originating-IP deny all
+request_header_access Via deny all
+
+# Управление заголовками ответов (от сервера к клиенту)
+reply_header_access X-Cache deny all
+reply_header_access X-Cache-Lookup deny all
+reply_header_access Via deny all
+reply_header_access X-Squid-Error deny all
+reply_header_access Server deny all
+
+# Замена User-Agent на Chrome
+request_header_access User-Agent allow all
+request_header_replace User-Agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.7204.405 Safari/537.36"
+
+# Добавляем заголовки обычного браузера
+request_header_add Accept "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
+request_header_add Accept-Language "en-US,en;q=0.9"
+request_header_add Accept-Encoding "gzip, deflate, br"
+request_header_add Connection "keep-alive"
+request_header_add Upgrade-Insecure-Requests "1"
+request_header_add Sec-Fetch-Dest "document"
+request_header_add Sec-Fetch-Mode "navigate"
+request_header_add Sec-Fetch-Site "cross-site"
+request_header_add Sec-Fetch-User "?1"
+request_header_add Sec-Ch-Ua '"Google";v="8", "Chromium";v="138", "Google Chrome";v="138"'
+request_header_add Sec-Ch-Ua-Mobile "?0"
+request_header_add Sec-Ch-Ua-Platform '"Windows"'
+
+# Дополнительные заголовки для полной имитации браузера
+request_header_add DNT "1"
+request_header_add Cache-Control "max-age=0"
+
+# Настройки производительности
+connect_timeout 15 seconds
+# read_timeout — единственный предел ПРОСТОЯ туннеля CONNECT: таймер переармируется
+# при любой передаче данных в любую сторону и действует на обе стороны туннеля.
+# Отсюда его значение = требуемый владельцем предел бездействия: соединение
+# закрывается при отсутствии активности в течение 1 часа.
+# Вторая роль той же величины — терпимость к длинным ответам AI API,
+# которое может «думать» и молчать десятки минут: обрывать его досрочно нельзя.
+# Умолчание здесь само по себе удовлетворяет требованию, чтобы развёртывание
+# без переменной read_timeout в инвентори не давало более короткого предела.
+read_timeout {{ read_timeout | default('1 hour') }}
+request_timeout 30 seconds
+# client_idle_pconn_timeout — каноническое имя директивы (легаси-псевдоним
+# persistent_request_timeout не документируется и не переживёт смену мажорной версии).
+# Ограничивает ТОЛЬКО ожидание следующего запроса HTTP в уже неразрывном (keep-alive)
+# клиентском соединении; на туннели CONNECT не влияет, потому пределом простоя
+# туннеля не является и на требование владельца не воздействует.
+client_idle_pconn_timeout 60 seconds
+# client_lifetime — предельный срок жизни клиентского соединения; пределом простоя
+# НЕ является. В туннеле CONNECT ограничивает лишь окно до первого байта и обмен
+# CONNECT с вышестоящим пиром, поэтому обязан быть строго больше read_timeout,
+# иначе фаза «до первого байта» оборвётся раньше требуемого часа.
+# 1 day — умолчание Squid; задано явно, чтобы намерение читалось в файле.
+client_lifetime 1 day
+half_closed_clients off
+shutdown_lifetime 3 seconds
+
+# SMP - использование всех ядер CPU
+{% set cpu_cores = ansible_processor_vcpus | default(1) %}
+{% if cpu_cores > 1 %}
+# Предел числа дескрипторов задаётся и здесь, а не только через systemd
+# и limits.d: иначе действующее значение не видно в конфигурации службы,
+# и расхождение с пределом узла обнаруживается лишь под нагрузкой.
+max_filedescriptors {{ fd_limit | default(65535) }}
+
+workers {{ cpu_cores }}
+{% endif %}
+
+# Persistent connections - переиспользование соединений
+client_persistent_connections on
+server_persistent_connections on
+
+# Pipelining - параллельная обработка запросов
+pipeline_prefetch 10
+
+# Quick abort - быстрое освобождение ресурсов при отмене
+quick_abort_min 0 KB
+quick_abort_max 0 KB
+quick_abort_pct 100
+
+# Retry при ошибках
+retry_on_error on
+forward_max_tries 3
+
+# Отключаем ротацию логов (управляется системой)
+logfile_rotate 0
+debug_options ALL,1
+
+# Размеры памяти — доли предела cgroup для службы ({{ mem_squid_mb | default(64) }} MB),
+# а не доли RAM узла: предел уже учитывает бюджет всех служб и двукратный
+# запас на раздувание. Сумма внутренних размеров держится ниже предела,
+# чтобы рост под нагрузкой гасился вытеснением, а не остановкой службы.
+{% set squid_limit_mb = mem_squid_mb | default(64) | int %}
+{% set pools_mb = (squid_limit_mb * 0.5) | int %}
+{% set cache_mem_mb = (squid_limit_mb * 0.25) | int %}
+# Пулы внутренних структур: {{ pools_mb }} MB (50% предела)
+memory_pools_limit {{ pools_mb }} MB
+# Кеш объектов в памяти: {{ cache_mem_mb }} MB (25% предела)
+cache_mem {{ cache_mem_mb }} MB
+maximum_object_size_in_memory 512 KB
+memory_replacement_policy lru
+
+# FTP настройки
+ftp_passive on
+ftp_sanitycheck on
+
+# ICP отключен
+icp_port 0
+
+# Настройки DNS
+dns_nameservers 127.0.0.1
+dns_retransmit_interval 2 seconds
+dns_timeout 15 seconds
+positive_dns_ttl {{ squid_positive_dns_ttl | default('6 hours') }}
+negative_dns_ttl {{ squid_negative_dns_ttl | default('30 seconds') }}
+
+# Буферизация логов для снижения I/O
+buffered_logs on

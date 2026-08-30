@@ -1,0 +1,40 @@
+@startuml CC-artifact-lifecycle
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+skinparam state {
+  BackgroundColor #FFFFFF
+  BorderColor #333333
+}
+
+title Канонический жизненный цикл артефактов
+
+[*] --> absent
+
+absent --> draft : Создание артефакта\n(AI или человек)
+draft --> review : Секции заполнены,\nссылки корректны
+review --> verified : Автоматическая проверка\nпройдена (V1–V17)
+verified --> accepted : Ревью человеком\nподтверждено
+accepted --> current : Дочерние требования\nconformance ≥ 3
+
+current --> deprecated : Замена запланирована
+deprecated --> retired : Все зависимости\nмигрированы
+
+current --> outdated : Изменение связанного\nтребования / реализации
+outdated --> review : Необходима\nпереработка
+outdated --> accepted : Быстрая\nреактуализация
+
+retired --> [*]
+
+state absent #F5F5F5 : Артефакт не начат
+state draft #FFF9C4 : Создан с обязательными\nсекциями
+state review #FFE0B2 : Заполнен, ожидает\nпроверки
+state verified #C8E6C9 : Автопроверка\nпройдена
+state accepted #81C784 : Человек\nподтвердил
+state current #4CAF50 : Актуален,\nдочерние ≥ 3
+state outdated #FFCDD2 : Требует\nактуализации
+state deprecated #E0E0E0 : Замена\nзапланирована
+state retired #BDBDBD : Все зависимости\nмигрированы
+
+@enduml

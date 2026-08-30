@@ -1,0 +1,140 @@
+{# [AITS] 2026-08-29T21:59:45Z #}
+# {{ ansible_managed }}
+# Unbound caching DNS resolver — {{ proxy_role }} node
+#
+# Роль {{ proxy_role }}:
+{% if proxy_role == 'access' %}
+#   Форвардит запросы ТОЛЬКО на unbound upstream-нод (не в публичный интернет)
+{% else %}
+#   Форвардит запросы на публичные DNS-серверы через DNS-over-TLS
+{% endif %}
+
+server:
+    # Слушаем только localhost — внешний доступ не нужен
+{% if proxy_role == 'upstream' %}
+    # + адрес хоста для приёма запросов от access-нод
+    interface: 127.0.0.1
+    interface: {{ ansible_host }}
+{% else %}
+    interface: 127.0.0.1
+{% endif %}
+    port: {{ dns_resolver_port | default(53) }}
+
+    # Доступ: localhost всегда, access-ноды — только на upstream.
+    # Список клиентов общий с правилами firewall (dns_allowed_clients),
+    # чтобы прикладной и сетевой уровни не расходились.
+    # Совпадение — по самому длинному префиксу, поэтому /32-разрешения
+    # и /8 для localhost сильнее запрета 0.0.0.0/0 ниже.
+    access-control: 127.0.0.0/8 allow
+{% if proxy_role == 'upstream' %}
+{% for client in _dns_allowed_clients | default([]) %}
+    access-control: {{ client }}/32 allow
+{% endfor %}
+{% endif %}
+    # deny, а не refuse: запрос отбрасывается без ответа. REFUSED — это ответ,
+    # то есть отклик сканеру и плечо для отражённого трафика.
+    access-control: 0.0.0.0/0 deny
+
+    # Производительность: потоки по числу ядер
+    num-threads: {{ _dns_threads }}
+
+    # Кеш: доля предела памяти службы — одна шестая на каждый из трёх кешей,
+    # не менее 4 МБ; вместе с удвоенным rrset выходит около двух третей предела
+    msg-cache-size: {{ _dns_cache_mb }}m
+    rrset-cache-size: {{ (_dns_cache_mb | int * 2) }}m
+    key-cache-size: {{ _dns_cache_mb }}m
+
+    # Сегменты кеша. Unbound принимает здесь только степень двойки и при ином
+    # значении округляет сам, сообщая об этом в журнале. Округляем в вычислении:
+    # при 3, 6, 12 ядрах прежнее значение степенью двойки не было, и в журнал шло
+    # сообщение, неотличимое по виду от неисправности.
+    # Округление — вниз до ближайшей степени двойки (2^floor(log2 n)), не меньше 1:
+    # сегментов больше числа потоков не нужно, они лишь дробят память.
+{% set _dns_slabs = 2 ** ((_dns_threads | int).bit_length() - 1) if (_dns_threads | int) > 0 else 1 %}
+    msg-cache-slabs: {{ _dns_slabs }}
+    rrset-cache-slabs: {{ _dns_slabs }}
+    key-cache-slabs: {{ _dns_slabs }}
+    infra-cache-slabs: {{ _dns_slabs }}
+
+    # Срок хранения записи в кеше берётся из самой зоны: проект не задаёт
+    # ни нижнего, ни верхнего предела.
+    #
+    # Нижнего предела нет по умолчанию самого unbound (cache-min-ttl = 0,
+    # cache-min-negative-ttl = 0), поэтому обе директивы здесь просто
+    # отсутствуют — короткий срок зоны не удлиняется.
+    #
+    # А вот потолки продолжают действовать молча и БЕЗ записи в файле:
+    # умолчания unbound равны 86400 с для положительных ответов и 3600 с
+    # для отрицательных. Удалить строки недостаточно — умолчания усекали бы
+    # сверху срок, объявленный зоной. Потому потолки сняты явным
+    # значением 2147483647 (предел знакового 32-разрядного счётчика секунд):
+    # большие числа стоят здесь не как «желаемый срок», а как отключение
+    # усечения — действительный срок по-прежнему диктует зона.
+    cache-max-ttl: 2147483647
+    cache-max-negative-ttl: 2147483647
+
+    # serve-expired / serve-expired-ttl намеренно отсутствуют (умолчание
+    # unbound — выключено). serve-expired выдаёт клиенту запись ПОСЛЕ
+    # истечения объявленного зоной срока, что прямо противоречит политике
+    # выше, причём по умолчанию срабатывает уже при 1,8 с задержки ответа,
+    # а не только при отказе вышестоящего резолвера. Удалять их следует
+    # ПАРОЙ: без serve-expired-ttl окно выдачи просроченной записи
+    # расширяется до умолчания 86400 с. Понадобится аварийная выдача —
+    # заводится отдельный явный выключатель в defaults роли, а не молчаливое
+    # умолчание, и решение это архитектурное (доступность против строгости
+    # срока), а не настроечное.
+
+    # Prefetch: популярная запись обновляется в фоне в последние 10 % своего
+    # срока. Срок, отдаваемый клиенту, при этом не удлиняется — клиент всегда
+    # получает запись внутри срока зоны, — а фоновое обновление гасит прирост
+    # числа запросов к вышестоящим резолверам от снятого нижнего предела.
+{% if dns_resolver_prefetch | default(true) %}
+    prefetch: yes
+{% endif %}
+    # prefetch-key — упреждающая выборка ключей DNSSEC, поэтому привязана
+    # к включённой валидации DNSSEC, а не к prefetch записей: без валидации
+    # ключи не запрашиваются вовсе и выбирать нечего.
+{% if dns_resolver_dnssec | default(true) %}
+    prefetch-key: yes
+{% endif %}
+
+    # Безопасность
+    hide-identity: yes
+    hide-version: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    # harden-referral-path вызывает ложные SERVFAIL в forwarding mode
+    # (unbound не может проверить referral path через forwarder)
+    harden-referral-path: no
+    use-caps-for-id: yes
+
+    # DNSSEC (root.key в /var/lib/unbound/ — writable для unbound)
+{% if dns_resolver_dnssec | default(true) %}
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+{% endif %}
+
+    # Оптимизации
+    so-reuseport: yes
+    so-rcvbuf: 4m
+    so-sndbuf: 4m
+    edns-buffer-size: 1232
+    minimal-responses: yes
+
+    # Логирование: только ошибки
+    verbosity: 1
+    logfile: ""
+    use-syslog: yes
+    log-queries: no
+    log-replies: no
+
+# Форвардинг — все запросы через upstream DNS
+forward-zone:
+    name: "."
+{% if proxy_role == 'upstream' %}
+    # Публичные DNS-резолверы из dns_servers (plain DNS, порт 53)
+{% else %}
+    # Access: форвардинг на unbound upstream-нод (plain DNS)
+{% endif %}
+{% for server in _dns_forwarders %}
+    forward-addr: {{ server }}
+{% endfor %}

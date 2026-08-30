@@ -1,0 +1,23 @@
+---
+- name: Debug variables for access-01
+  hosts: access-01
+  gather_facts: false
+  tasks:
+    - name: Show proxy_role variable
+      debug:
+        msg: "proxy_role = {{ proxy_role | default('UNDEFINED') }}"
+
+    - name: Show nginx_on_443 variable
+      debug:
+        msg: "nginx_on_443 = {{ nginx_on_443 | default('UNDEFINED') }}"
+
+    - name: Show when condition result
+      debug:
+        msg: "Condition result: proxy_role='{{ proxy_role | default('UNDEFINED') }}' AND nginx_on_443={{ nginx_on_443 | default(false) | bool }}"
+
+    - name: Test the exact when condition
+      debug:
+        msg: "This task would run if the nginx role condition is true"
+      when:
+        - proxy_role == 'access'
+        - nginx_on_443 | default(false) | bool

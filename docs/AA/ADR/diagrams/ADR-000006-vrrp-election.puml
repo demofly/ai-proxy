@@ -1,0 +1,59 @@
+@startuml ADR-000006-vrrp-election
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Keepalived VRRP — health-check с автоперезапуском Squid
+
+|Keepalived (Access-1)|
+start
+:Запуск Keepalived\nstate=MASTER, priority=100;
+
+fork
+  :vrrp_script check_squid\n(interval 2s);
+  repeat
+    :Выполнение\ncheck_and_restart_squid.sh;
+    :killall -0 squid\n(сигнал 0 — проверка,\nне убивает процесс);
+    if (Squid жив?) then (да)
+      :rise counter++\nfall counter = 0;
+      if (rise ≥ 2?) then (да)
+        :weight восстановлен\npriority = 100;
+      endif
+    else (нет)
+      if (Cooldown истёк?) then (да)
+        :systemctl restart squid\nlogger → syslog;
+      else (нет)
+        :Ожидание cooldown;
+      endif
+      :fall counter++\nrise counter = 0;
+      if (fall ≥ 3?) then (да)
+        :weight -20 применён\npriority = 80;
+      endif
+    endif
+  repeat while (Keepalived active?)
+fork again
+  :VRRP advertisement\n(multicast 224.0.0.18\nproto 112, advert_int=1s);
+  repeat
+    :Отправка VRRP advert\nс текущим priority;
+  repeat while (state = MASTER?)
+end fork
+
+|Keepalived (Access-2)|
+:state=BACKUP, priority=90;
+repeat
+  :Ожидание VRRP advertisement;
+  if (Получен advert?) then (да)
+    if (Свой priority > advert priority?) then (да)
+      :Переход в MASTER\nGratuitous ARP → VIP;
+      stop
+    else (нет)
+      :Остаёмся BACKUP;
+    endif
+  else (нет, таймаут 3s)
+    :MASTER недоступен\nПереход в MASTER\nGratuitous ARP → VIP;
+    stop
+  endif
+repeat while (state = BACKUP?)
+
+@enduml

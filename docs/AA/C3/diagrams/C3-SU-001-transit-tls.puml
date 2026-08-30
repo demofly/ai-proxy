@@ -1,0 +1,47 @@
+@startuml C3-SU-001-transit-tls
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+
+title Приём участка access → upstream: две ветки по устройству узла
+
+participant "Squid\naccess-узла" as ACC
+participant "nginx\nмаршрутизатор :443" as ROUTER
+participant "nginx\nтерминатор :4444" as TERM
+participant "Squid\nupstream-узла" as SQUID
+
+== Ветка А: Squid слушает сам (MTProxy выключен) ==
+
+ACC -> SQUID : TLS на squid_port\n(https_port с сертификатом участка)
+note right of ACC
+  Проверка принимающей стороны:
+  tls-no-default-ca отсекает системные УЦ,
+  tls-cafile задаёт единственный доверенный
+  сертификат, tls-domain — проверяемое имя.
+end note
+SQUID -> SQUID : снятие TLS,\nразбор CONNECT
+SQUID --> ACC : 200 Connection Established
+
+== Ветка Б: Squid за маршрутизатором (MTProxy включён) ==
+
+ACC -> ROUTER : TLS на :443,\nимя участка в SNI
+ROUTER -> ROUTER : чтение имени без терминации\n(ssl_preread)
+ROUTER -> TERM : по записи карты имён\nsni-map.d/squid.conf
+TERM -> TERM : снятие TLS
+TERM -> SQUID : разобранный CONNECT,\nадрес клиента протоколом PROXY
+SQUID --> TERM : 200 Connection Established
+TERM --> ROUTER : ответ в TLS участка
+ROUTER --> ACC : 200 Connection Established
+
+note over ACC, SQUID
+  Что закрывает шифрование участка: заголовок CONNECT,
+  то есть ИМЯ целевого сервиса. Содержимое обмена защищено
+  сквозным шифрованием клиента с сервисом независимо от него.
+  Без шифрования участка наблюдателю между узлами виден адресат.
+
+  Порт назначения выбирает сторона access по устройству
+  принимающего узла: 443 при маршрутизаторе, иначе squid_port.
+end note
+
+@enduml

@@ -1,0 +1,50 @@
+@startuml C2-FR-004-caching-flow
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Механизм кеширования Squid (access-уровень)
+
+start
+
+:Squid получает запрос от клиента;
+
+if (Метод — CONNECT?) then (да)
+  :Туннель к целевому узлу;
+  note right
+    Содержимое зашифровано сквозным TLS
+    между клиентом и AI API: кешированию
+    не поддаётся. Этим идёт основной
+    трафик проекта — см. DE-TR-001.
+  end note
+  stop
+else (нет — обычный запрос HTTP)
+endif
+
+if (enable_caching = true?) then (да)
+  if (Запрос в кэше\n(TCP_HIT)?) then (да)
+    :Отдать ответ из кэша;
+    note right
+      ufs disk storage
+      /var/spool/squid/
+    end note
+    :Записать TCP_HIT\nв access.log;
+  else (нет — TCP_MISS)
+    :Переслать запрос\nна upstream через\ncache_peer;
+    :Получить ответ\nот upstream;
+    if (Ответ кешируемый?\n(Cache-Control, Expires;\nправила свежести\nне заданы)) then (да)
+      :Сохранить в ufs\n(до maximum_object_size\n50 MB);
+    else (нет)
+    endif
+    :Отдать ответ клиенту;
+    :Записать TCP_MISS\nв access.log;
+  endif
+else (нет — pass-through)
+  :Переслать запрос\nна upstream напрямую;
+  :Отдать ответ клиенту;
+endif
+
+stop
+
+@enduml

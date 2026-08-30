@@ -1,0 +1,96 @@
+@startuml DD-SourceMap-dependencies
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title Граф зависимостей данных\nInventory → Configs → Services → Logs → Analysis
+
+' --- SSOT ---
+artifact "inventory.yml\n(SSOT)" as inv #FFF9C4
+
+' --- Jinja2 Templates ---
+rectangle "Jinja2 Templates" as j2 #E8F5E9 {
+  artifact "squid-access.conf.j2" as squid_a_j2
+  artifact "squid-upstream.conf.j2" as squid_u_j2
+  artifact "keepalived.conf.j2" as ka_j2
+  artifact "mtg.toml.j2" as mtg_j2
+  artifact "00-sni-router.conf.j2" as nx_sni_j2
+  artifact "10-aiproxy-upstreams.conf.j2" as nx_ups_j2
+  artifact "sni-map.d/aiproxy.conf.j2" as nx_map_j2
+  artifact "nginx-mtproxy-stream.conf.j2" as nx_mtp_j2
+  artifact "nftables-upstream.conf.j2" as nft_j2
+}
+
+' --- Target configs ---
+rectangle "Целевые конфигурации" as configs #E3F2FD {
+  file "squid.conf\n(access)" as squid_access
+  file "squid.conf\n(upstream)" as squid_upstream
+  file "passwd" as passwd
+  file "keepalived.conf" as ka_conf
+  file "mtg.toml" as mtg_conf
+  file "00-sni-router.conf" as nx_sni
+  file "10-aiproxy-upstreams.conf" as nx_ups
+  file "sni-map.d/aiproxy.conf" as nx_map
+  file "nginx-mtproxy-stream.conf" as nx_mtp
+  file "nftables.conf\n(upstream)" as nft_conf
+}
+
+' --- Runtime ---
+rectangle "Runtime данные" as runtime #FCE4EC {
+  database "access.log" as accesslog
+}
+
+' --- Analysis ---
+rectangle "Анализ и enforcement" as analysis #F3E5F5 {
+  component "CrowdSec\nacquisition" as cs_acq
+  component "CrowdSec\ndecisions" as cs_dec
+  component "nftables\nbouncer" as nft
+}
+
+' === Потоки ===
+
+' inventory -> templates
+inv --> squid_a_j2
+inv --> squid_u_j2
+inv --> ka_j2
+inv --> mtg_j2
+inv --> nx_sni_j2
+inv --> nx_ups_j2
+inv --> nx_map_j2
+inv --> nx_mtp_j2
+inv --> nft_j2
+
+' templates -> configs
+squid_a_j2 --> squid_access : ACL, auth_param,\ncache_peer
+squid_u_j2 --> squid_upstream : ACL src
+
+ka_j2 --> ka_conf
+mtg_j2 --> mtg_conf
+nx_sni_j2 --> nx_sni
+nx_ups_j2 --> nx_ups
+nx_map_j2 --> nx_map
+nx_mtp_j2 --> nx_mtp
+nft_j2 --> nft_conf
+
+' access squid -> passwd (auth_param reference)
+squid_access ..> passwd : auth_param →\nbasic_ncsa_auth
+
+' access squid -> upstream (cache_peer)
+squid_access --> squid_upstream : cache_peer
+
+' access squid -> logs
+squid_access --> accesslog : logformat →\naccess_log
+
+' logs -> analysis
+accesslog --> cs_acq : tail mode
+cs_acq --> cs_dec : parsers +\nscenarios
+cs_dec --> nft : ban IP →\ncrowdsec-blacklists
+
+legend right
+  |= Линия |= Значение |
+  | Сплошная | Поток данных (transform / reference) |
+  | Пунктирная | Ссылка (file reference) |
+end legend
+
+@enduml

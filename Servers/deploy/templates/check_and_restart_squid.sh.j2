@@ -1,0 +1,40 @@
+#!/bin/bash
+# Keepalived vrrp_script: проверка Squid с автоперезапуском
+# Managed by Ansible - DO NOT EDIT MANUALLY
+#
+# Логика:
+#   1. killall -0 squid — проверка существования процесса (сигнал 0, не убивает)
+#   2. Если процесс жив — exit 0 (OK)
+#   3. Если мёртв — однократный systemctl restart squid
+#   4. Exit 1 → keepalived применяет weight -20 → возможен failover
+#   5. При следующей проверке (через interval), если squid поднялся — exit 0 → rise восстановит priority
+#
+# Защита от restart-storm: lockfile с TTL {{ keepalived_restart_cooldown | default(30) }}s
+
+LOCKFILE="/run/keepalived_squid_restart.lock"
+COOLDOWN={{ keepalived_restart_cooldown | default(30) }}
+
+# Проверка: жив ли Squid?
+/usr/bin/killall -0 squid 2>/dev/null
+if [ $? -eq 0 ]; then
+    # Squid жив — очистить lockfile если остался
+    [ -f "$LOCKFILE" ] && rm -f "$LOCKFILE"
+    exit 0
+fi
+
+# Squid мёртв — проверить cooldown
+if [ -f "$LOCKFILE" ]; then
+    LOCK_AGE=$(( $(date +%s) - $(stat -c %Y "$LOCKFILE") ))
+    if [ "$LOCK_AGE" -lt "$COOLDOWN" ]; then
+        # Недавно уже пытались перезапустить — ждём, не спамим
+        exit 1
+    fi
+fi
+
+# Перезапуск Squid
+touch "$LOCKFILE"
+logger -t keepalived-chk "Squid process not found, attempting restart"
+/usr/bin/systemctl restart squid 2>/dev/null
+
+# Вернуть ошибку — weight снизится; при следующей успешной проверке rise восстановит
+exit 1

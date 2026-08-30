@@ -1,0 +1,53 @@
+@startuml C3-NX-001-sni-routing
+!theme plain
+skinparam backgroundColor white
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 12
+top to bottom direction
+
+title Маршрутизация по имени SNI и точки расширения узла
+
+package "Единственный nginx узла" as NGINX {
+  component "nginx.conf\nworker_connections,\nworker_rlimit_nofile" as CONF #FF8C00
+  component "00-sni-router.conf\nслушатель :443,\nчтение имени без терминации" as ROUTER #FF8C00
+  component "журнал маршрутизации\nsni-router.log" as LOG #FF8C00
+}
+
+package "Точки расширения (каталоги)" as EXT {
+  component "stream.d/sni-map.d/*.conf\nзаписи карты имён" as MAPD
+  component "stream.d/*.conf\nпотоковые блоки" as STREAMD
+  component "stream.d/router.d/*.conf\nвставки внутрь слушателя" as ROUTERD
+  component "conf.d/*.conf\nвиртуальные хосты HTTP" as CONFD
+}
+
+component "Squid\nбэкенд по умолчанию" as SQUID
+component "терминатор TLS участка\n:4444" as TERM
+component "терминатор MTProxy" as MTG
+component "файлы соседнего проекта" as NEIGH #E8F5E9
+
+CONF -[#191970]-> ROUTER : пределы соединений\nи дескрипторов
+ROUTER -[#0066CC]-> MAPD : включает карту имён
+ROUTER -[#0066CC]-> ROUTERD : включает вставки
+ROUTER -[#009933]-> SQUID : имя не совпало —\nбэкенд по умолчанию
+ROUTER -[#009933]-> TERM : имя участка\n(squid_tls_sni)
+ROUTER -[#009933]-> MTG : имя маскировки MTProxy
+ROUTER -[#CC6600]-> LOG : адрес клиента, имя SNI,\nадрес назначения, код, объём
+NEIGH -[#666666]-> MAPD : сосед кладёт свои записи
+NEIGH -[#666666]-> STREAMD : и свои потоковые блоки
+NEIGH -[#666666]-> CONFD : и свои виртуальные хосты
+
+legend right
+  |= Цвет |= Смысл связи |
+  | <color:#191970>тёмно-синий</color> | настройка пределов |
+  | <color:#0066CC>синий</color> | включение фрагментов |
+  | <color:#009933>зелёный</color> | маршрут соединения |
+  | <color:#CC6600>оранжевый</color> | запись события |
+  | <color:#666666>серый</color> | вклад соседнего проекта |
+
+  Оранжевая заливка — объекты, которыми
+  распоряжается ai-proxy как владелец nginx:
+  он перезаписывает их без оглядки на найденное.
+  Сосед расширяет узел только через каталоги.
+endlegend
+
+@enduml

@@ -1,0 +1,50 @@
+# iptables ruleset - Upstream Proxy (chain {{ squid_chain }})
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# Host: {{ inventory_hostname }} ({{ ansible_host }})
+#
+# Applied with `iptables-restore --noflush`: only the chain declared below is
+# replaced, and the replacement is one transaction — there is no intermediate
+# state with an empty chain in which port 53 would be open.
+#
+# Co-deployment (Matrix and others share these nodes): built-in chains
+# (INPUT/FORWARD/OUTPUT) and chains of other projects keep their rules, because
+# `--noflush` touches only what this file declares. For that reason the file
+# must never declare a built-in chain, and the jump from INPUT is managed
+# separately (an idempotent check-and-insert task), not from here.
+#
+# The same file is replayed at boot by aiproxy-firewall.service.
+*filter
+:{{ squid_chain }} - [0:0]
+
+# Loopback returns to INPUT before any DROP below:
+# Squid and the system resolve through 127.0.0.1:53
+-A {{ squid_chain }} -i lo -j RETURN
+
+# Squid only from access proxies
+{% for host in groups['access_proxies'] %}
+-A {{ squid_chain }} -s {{ hostvars[host]['ansible_host'] }} -p tcp --dport {{ squid_port }} -j ACCEPT
+{% endfor %}
+{% if mtproxy_enabled | default(false) | bool %}
+
+# MTProxy TLS (nginx on 443) from access proxies
+{% for host in groups['access_proxies'] %}
+-A {{ squid_chain }} -s {{ hostvars[host]['ansible_host'] }} -p tcp --dport 443 -j ACCEPT
+{% endfor %}
+{% endif %}
+
+# DNS (unbound) from access proxies - both transports
+{% for client in dns_allowed_clients | default([]) %}
+-A {{ squid_chain }} -s {{ client }} -p tcp --dport 53 -m comment --comment "DNS from access proxy {{ client }}" -j ACCEPT
+-A {{ squid_chain }} -s {{ client }} -p udp --dport 53 -m comment --comment "DNS from access proxy {{ client }}" -j ACCEPT
+{% endfor %}
+
+# Everything else aimed at the protected ports is dropped.
+# Order matters: the chain is walked top-down, first match decides, and the
+# INPUT policy is ACCEPT — without these rules the ports stay open to everyone.
+-A {{ squid_chain }} -p tcp --dport {{ squid_port }} -j DROP
+-A {{ squid_chain }} -p tcp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
+-A {{ squid_chain }} -p udp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
+
+# Traffic to any other port is left to INPUT and to other projects' chains
+-A {{ squid_chain }} -j RETURN
+COMMIT

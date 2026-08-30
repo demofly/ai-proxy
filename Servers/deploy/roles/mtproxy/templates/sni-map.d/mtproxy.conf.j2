@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+# MTProxy: SNI routing entries (upstream nodes)
+# Access relay connects with proxy_ssl_name set to this hostname
+
+{% if mtproxy_hostname is defined and mtproxy_hostname != "" %}
+{{ mtproxy_hostname }}  mtproxy_tls_term;
+{% endif %}

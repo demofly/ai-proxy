@@ -1,0 +1,54 @@
+@startuml C2-NF-002-crowdsec-pipeline
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam defaultFontName "Segoe UI"
+skinparam defaultFontSize 11
+
+title CrowdSec IPS — конвейер обнаружения и блокировки
+
+|Squid Access|
+start
+:Запись HTTP-запроса\nв access.log;
+note right
+  IP, метод, URL,
+  статус (200/407),
+  username, timestamp
+end note
+
+|CrowdSec Agent|
+:Чтение журналов\n(acquis.d/aiproxy.yaml,\nрежим слежения);
+:Парсинг полей\n(IP, метод, статус, user);
+note right
+  Требует парсера для метки squid.
+  Ни одна из четырёх устанавливаемых
+  коллекций его не содержит по составу
+  задачи установки; на узле не проверено.
+  Без парсера ветвь ниже не срабатывает
+  на журнале обращений (GAP-068)
+end note
+:Применение сценариев\nобнаружения;
+
+if (Паттерн обнаружен?) then (да)
+  note right
+    Примеры паттернов:
+    • N × 407 за T секунд (brute-force)
+    • Высокая частота запросов (rate limit)
+    • Сканирование URL (scan detection)
+  end note
+  :Создание decision\n(ban IP, duration);
+
+  |nftables Bouncer|
+  :Получение decision\nот CrowdSec LAPI;
+  :Добавление правила\nDROP в nftables;
+  note right
+    nft add element inet filter
+    crowdsec-blacklists { <IP> }
+  end note
+  :IP заблокирован;
+  stop
+else (нет)
+  :Продолжение\nмониторинга;
+  stop
+endif
+
+@enduml

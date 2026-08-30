@@ -1,0 +1,119 @@
+{
+  "mode": "proxy.example.com:443",
+  "sync": false,
+  "autoBackup": false,
+  "passthrough": "",
+  "theme": "",
+  "container": {},
+  "commands": {
+    "setProxy": "",
+    "setTabProxy": "",
+    "includeHost": "",
+    "excludeHost": ""
+  },
+  "data": [
+    {
+      "active": true,
+      "title": "proxy.example.com",
+      "type": "http",
+      "hostname": "proxy.example.com",
+      "port": "443",
+      "username": "USERNAME",
+      "password": "PASSWORD",
+      "cc": "EU",
+      "city": "",
+      "color": "#ff8080",
+      "pac": "",
+      "pacString": "",
+      "proxyDNS": true,
+      "include": [
+        {
+          "type": "regex",
+          "title": "Gemini",
+          "pattern": "^https?://(.*\\.)*((gemini|clients|aistudio|play)\\.google\\.com|(gstatic|googleusercontent|googleapis)\\.com)($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "ChatGPT",
+          "pattern": "^https?://(.*\\.)*(chatgpt|openai)\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "Claude",
+          "pattern": "^https?://(.*\\.)*(claude\\.(ai|com)|(anthropic|claudeusercontent)\\.com|sentry\\.io)($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "Grok",
+          "pattern": "^https?://(.*\\.)*(grok|grokusercontent|grokipedia)\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "X AI",
+          "pattern": "^https?://(.*\\.)*x\\.ai($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "CloudFlare base",
+          "pattern": "^https?://(.*\\.)*cloudflare\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "Cursor",
+          "pattern": "^https?://(.*\\.)*cursor(api)?\\.(sh|com|so)($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "Microsoft AI",
+          "pattern": "^https?://(.*\\.)*((bing(apis)?|msn|msedge)\\.(com|net)|(copilot|designer|cognitive)\\.microsoft\\.com|(openai|cognitiveservices|ml)\\.azure\\.com|azureml\\.net|microsoft(365|usercontent)?\\.com|office(365)?\\.com|azure(edge)?\\.(com|net)|login\\.(microsoftonline|live)\\.com)($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "Github|Copilot",
+          "pattern": "^https?://(.*\\.)*github(copilot)?\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "DeepL",
+          "pattern": "^https?://(.*\\.)*deepl\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "Alibaba Cloud AI",
+          "pattern": "^https?://(.*\\.)*(dashscope\\.aliyuncs\\.com|alibabacloud\\.com)($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "VSCode CDN",
+          "pattern": "^https?://(.*\\.)*vscode-cdn\\.net($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "GitHub Copilot Proxy",
+          "pattern": "^https?://copilot-proxy\\.githubusercontent\\.com($|/)",
+          "active": true
+        },
+        {
+          "type": "regex",
+          "title": "AI domains (.ai)",
+          "pattern": "^https?://[^/]*\\.ai($|/)",
+          "active": true
+        }
+      ],
+      "exclude": [],
+      "tabProxy": []
+    }
+  ]
+}
