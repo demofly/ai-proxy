@@ -1,0 +1,41 @@
+---
+- name: Create the shared services contract directory
+  ansible.builtin.file:
+    path: /etc/shared-host
+    state: directory
+    mode: '0755'
+
+- name: Initialize the persistent nftables child chain without replacing Matrix rules
+  ansible.builtin.copy:
+    dest: /etc/shared-host/matrix-ports.nft
+    content: "return\n"
+    force: false
+    mode: '0644'
+
+- name: Install the owner firewall integration for Matrix
+  ansible.builtin.copy:
+    src: scripts/apply-shared-ports.py
+    dest: /usr/local/sbin/aiproxy-apply-shared-ports
+    mode: '0755'
+
+- name: Restore shared iptables ports after the owner at boot
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/aiproxy-shared-ports.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Shared services port contract for ai-proxy
+      After=network-pre.target nftables.service aiproxy-firewall.service
+      Before=nginx.service matrix-synapse.service livekit.service coturn.service
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/aiproxy-apply-shared-ports
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Enable persistent shared firewall rules
+  ansible.builtin.systemd:
+    name: aiproxy-shared-ports
+    enabled: true
+    daemon_reload: true

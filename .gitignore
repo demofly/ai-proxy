@@ -18,3 +18,7 @@ Servers/deploy/tls/
 # системы и незакрытых вопросов. Ведётся локально, раскрытию не подлежит.
 docs/AA/Ideas.md
 docs/AA/Ideas-archive.md
+
+# Local Python verification artifacts
+__pycache__/
+*.py[cod]

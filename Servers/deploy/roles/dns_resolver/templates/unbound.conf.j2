@@ -38,8 +38,7 @@ server:
     # Производительность: потоки по числу ядер
     num-threads: {{ _dns_threads }}
 
-    # Кеш: доля предела памяти службы — одна шестая на каждый из трёх кешей,
-    # не менее 4 МБ; вместе с удвоенным rrset выходит около двух третей предела
+    # Cache capacities leave room for malloc overhead, sockets and resolver state.
     msg-cache-size: {{ _dns_cache_mb }}m
     rrset-cache-size: {{ (_dns_cache_mb | int * 2) }}m
     key-cache-size: {{ _dns_cache_mb }}m
@@ -115,8 +114,8 @@ server:
 
     # Оптимизации
     so-reuseport: yes
-    so-rcvbuf: 4m
-    so-sndbuf: 4m
+    so-rcvbuf: 256k
+    so-sndbuf: 256k
     edns-buffer-size: 1232
     minimal-responses: yes
 

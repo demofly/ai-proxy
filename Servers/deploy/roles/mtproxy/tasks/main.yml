@@ -240,6 +240,13 @@
 # Прежде эти строки не задавал никто из нашего проекта: при одиночном
 # размещении действовало умолчание поставки (768 на рабочий процесс),
 # при совместном их ставил сосед, выводя из числа СВОИХ пользователей.
+- name: Bound shared nginx workers by its service memory
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: '^worker_processes'
+    line: "worker_processes {{ proxy_nginx_workers | default(1) }};"
+  notify: Reload nginx
+
 - name: Tune shared nginx worker_connections (owner of the node's nginx)
   ansible.builtin.lineinfile:
     path: /etc/nginx/nginx.conf
@@ -616,7 +623,7 @@
       ExecStart=/usr/local/bin/mtg run /etc/mtproxy/mtg.toml
       Restart=on-failure
       RestartSec=5
-      MemoryHigh={{ (mem_mtproxy_mb | default(32) | int * 0.8) | int }}M
+      Environment=GOMEMLIMIT={{ (mem_mtproxy_mb | default(32) | int * 0.65) | int }}MiB
       MemoryMax={{ mem_mtproxy_mb | default(32) }}M
       LimitNOFILE=4096
 

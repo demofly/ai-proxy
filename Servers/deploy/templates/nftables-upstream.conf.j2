@@ -23,8 +23,14 @@ table inet filter {
 {% endif %}
     }
 
+    chain matrix_services {
+        include "/etc/shared-host/matrix-ports.nft"
+    }
+
     chain input {
         type filter hook input priority 0; policy drop;
+
+        jump matrix_services comment "Matrix shared ports"
 
         # Allow established/related connections
         # (includes replies to unbound's own outgoing DNS queries)

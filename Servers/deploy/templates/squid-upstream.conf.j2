@@ -128,7 +128,7 @@ shutdown_lifetime 3 seconds
 # Предел числа дескрипторов наблюдаем в конфигурации, а не только в окружении.
 max_filedescriptors {{ fd_limit | default(65535) }}
 
-workers {{ cpu_cores }}
+workers {{ squid_workers }}
 {% endif %}
 
 # Persistent connections - переиспользование соединений

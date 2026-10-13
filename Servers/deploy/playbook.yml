@@ -54,28 +54,17 @@
     # проекты. Остаток нужен ядру, страничному кешу, sshd и журналу: без него
     # узел уходит в отказ раньше, чем сработает предел любой отдельной службы.
     #
-    # Каждый предел задан вдвое выше ожидаемого потребления службы. Приложение,
-    # раздувшееся вдвое, остаётся внутри собственного предела: соседей оно уже
-    # не задевает, а превышение предела гасит ядро, а не память узла целиком.
-    #
-    # Доли — от ВЫДЕЛЯЕМОГО объёма, а не от полной памяти узла: иначе при совместном
-    # размещении сумма долей (около двух третей памяти) не укладывалась бы в долю узла
-    # (чуть больше трети), и проверка бюджета отказывала бы при любом исправном
-    # состоянии. Сумма долей меньше единицы, и остаток внутри выделяемого объёма
-    # служит запасом на всплески. Нижние границы удерживают работоспособность
-    # на малых узлах, где доля вырождается в единицы мегабайт.
+    # Service limits are starting safety budgets, not proven 2x peaks.
+    # Shares are fractions of the validated allocation; minima never expand it.
     mem_reserve_share: 0.25            # ядру, страничному кешу, системным службам
                                        # (действует при ОДИНОЧНОМ размещении)
 
-    # Доля памяти узла, которую проект берёт себе при СОВМЕСТНОМ размещении.
-    # Задана прямо, а не выведена вычитанием доли соседа: вычитание опиралось
-    # на то, что сосед уже развёрнут и его пределы выставлены — до первого его
-    # прогона доля выходила нулевой, а после его правок устаревала молча.
-    # Разделение узла: ai-proxy 35 %, Matrix 50 % (больше — если его неснижаемые
-    # пределы того требуют), остальное ядру и системным службам.
+    # Shared-host allocation is capped and reduced by real foreign service limits.
     mem_share_when_shared: 0.35
 
-    mem_foreign_reserved_mb: 0         # устарело: см. mem_share_when_shared
+    mem_system_min_mb: 128
+    mem_reserve_when_shared_share: 0.15
+    mem_foreign_reserved_mb: 0         # explicit reserve; measured foreign limits still count
 
     mem_share_squid: 0.16
     mem_share_unbound: 0.06
@@ -85,27 +74,245 @@
     mem_share_crowdsec: 0.26
     mem_share_crowdsec_bouncer: 0.04
 
-    # Нижние границы ИЗМЕРЕНЫ, а не назначены: на прежних значениях служба прокси
-    # не запускалась вовсе (64 МБ — отказ запуска, 80 — граница поднятия при двух
-    # рабочих процессах и включённой проверке подлинности), а обнаружение вторжений
-    # потребляло на боевом узле больше своей границы. Граница, ниже которой служба
-    # не работает, обязана быть выше её потребления, иначе она не удерживает ничего.
-    #
-    # Граница службы маршрутизации учитывает НАКОПЛЕННОЕ состояние, а не потребление
-    # свежего процесса. Измерено на боевом узле: сразу после запуска служба занимает
-    # 4 МБ, пик самой перезагрузки — 8 МБ, и укладывается она в сотые доли секунды.
-    # Но за девять дней непрерывной работы потребление выросло до 12 МБ, а пик — до 31
-    # при пределе 32: перезагрузка поднимает новый набор процессов, пока прежние
-    # дорабатывают соединения, накопленное состояние удваивается и упирается в предел.
-    # Служба тормозится ядром, перезагрузка не укладывается в срок и убивается.
-    # Граница 64 МБ даёт двукратный запас от наблюдавшегося пика.
+    # Starting floors include process/cache overhead and shared nginx reloads.
+    # Validate actual peaks under both projects' load before changing them.
     mem_min_squid: 96
     mem_min_unbound: 32
-    mem_min_nginx: 64
+    mem_min_nginx: 96
     mem_min_mtproxy: 32
     mem_min_keepalived: 12
     mem_min_crowdsec: 192
-    mem_min_crowdsec_bouncer: 24
+    mem_min_crowdsec_bouncer: 32
+
+  pre_tasks:
+    - name: Refresh hardware facts before resource planning
+      tags: [always]
+      ansible.builtin.setup:
+        gather_subset: ['!all', '!min', hardware]
+
+    - name: Calculate resource limits
+      tags: [always]
+      ansible.builtin.set_fact:
+        cpu_cores: "{{ ansible_processor_vcpus | default(1) }}"
+        ram_mb: "{{ ansible_memtotal_mb | default(2048) }}"
+        ram_for_proxy_mb: "{{ (ansible_memtotal_mb | default(2048) / 5) | int }}"
+        # Буферы сокетов: 1/20 от выделенной памяти на буфер (в байтах)
+        socket_buffer_bytes: "{{ [[((ansible_memtotal_mb | default(2048) / 100) * 1048576) | int, 262144] | max, 1048576] | min }}"
+        # Лимиты FD: 4096 на ядро, минимум 65535
+        fd_limit: "{{ [ansible_processor_vcpus | default(1) * 4096, 65535] | max }}"
+        # Очереди: 8192 на ядро, минимум 65535
+        queue_limit: "{{ [[ansible_processor_vcpus | default(1) * 1024, 512] | max, 8192] | min }}"
+        # TIME_WAIT buckets: 32768 на ядро
+        tw_buckets: "{{ ansible_processor_vcpus | default(1) * 32768 }}"
+
+    # =======================================================================
+    # Обнаружение соседнего проекта на узле
+    # =======================================================================
+    # Признак снимается осмотром при каждом прогоне, а не берётся из объявленной
+    # переменной: узел мог стать общим уже после прошлого развёртывания.
+    # Осматриваются три каталога модульного nginx — по одному на контекст, куда
+    # соседний проект кладёт свои файлы. Собственные имена перечислены поимённо;
+    # всё, что не наше, принадлежит соседям.
+    - name: Найти чужие файлы в каталогах расширения nginx
+      tags: [always]
+      ansible.builtin.find:
+        paths: "{{ item.path }}"
+        patterns: "*.conf"
+        excludes: "{{ item.own }}"
+        file_type: file
+        recurse: false
+      loop:
+        - path: /etc/nginx/stream.d
+          own: ["00-sni-router.conf", "10-aiproxy-*.conf", "10-mtproxy-tls.conf",
+                "20-squid-tls-term.conf"]
+        - path: /etc/nginx/stream.d/sni-map.d
+          own: ["aiproxy.conf", "mtproxy.conf", "squid.conf"]
+        - path: /etc/nginx/conf.d
+          own: ["default.conf"]
+      loop_control:
+        label: "{{ item.path }}"
+      register: _foreign_nginx_files
+      failed_when: false
+      changed_when: false
+
+    - name: Установить признак совместного размещения
+      tags: [always]
+      ansible.builtin.set_fact:
+        # Объявленное shared_host: true остаётся ручным перекрытием и осмотром
+        # не отменяется; осмотр может только поднять признак.
+        shared_host: >-
+          {{ (shared_host | default(false) | bool)
+             or ((_foreign_nginx_files.results | default([])
+                  | map(attribute='files') | map('default', []) | list | flatten | length) > 0) }}
+        _shared_host_evidence: >-
+          {{ (_foreign_nginx_files.results | default([])
+              | map(attribute='files') | map('default', []) | list | flatten
+              | map(attribute='path') | list) }}
+
+    - name: Сообщить результат осмотра узла
+      tags: [always]
+      ansible.builtin.debug:
+        msg: >-
+          Совместное размещение: {{ 'обнаружено' if (shared_host | bool) else 'не обнаружено' }}.
+          {{ 'Чужие файлы: ' ~ (_shared_host_evidence | join(', ')) if _shared_host_evidence | length > 0
+             else 'Чужих файлов в каталогах расширения nginx нет.' }}
+          Бюджет памяти: {{ (mem_share_when_shared | float * 100) | int if (shared_host | bool)
+             else ((1 - mem_reserve_share | float) * 100) | int }} % памяти узла.
+
+    # Пределы памяти служб: доля RAM, но не ниже нижней границы
+    # Выделяемый объём считается ПЕРВЫМ и отдельной задачей: от него зависят пределы
+    # служб, а значение факта, вычисленного в том же вызове set_fact, соседним
+    # выражениям того же вызова недоступно.
+    - name: Detect an active shared nginx before budgeting
+      tags: [always]
+      ansible.builtin.command: systemctl is-active nginx
+      register: _proxy_nginx_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Include the shared nginx in the owner resource plan
+      tags: [always]
+      ansible.builtin.set_fact:
+        _proxy_nginx_needed: "{{ behind_nginx | default(false) | bool or mtproxy_enabled | default(false) | bool or _proxy_nginx_state.stdout == 'active' }}"
+
+    - name: Validate host resource shares
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - mem_reserve_share | float > 0 and mem_reserve_share | float < 1
+          - mem_reserve_when_shared_share | float > 0 and mem_reserve_when_shared_share | float < 1
+          - mem_share_when_shared | float > 0 and mem_share_when_shared | float <= 1
+          - mem_foreign_reserved_mb | int >= 0
+          - mem_system_min_mb | int >= 128
+
+    - name: Collect current service memory limits
+      tags: [always]
+      ansible.builtin.command:
+        argv: [systemctl, show, '*.service', --property=Id, --property=MemoryMax, --property=ActiveState]
+      register: _proxy_service_memory
+      changed_when: false
+      check_mode: false
+
+    - name: Account for services outside ai-proxy
+      tags: [always]
+      ansible.builtin.set_fact:
+        _proxy_foreign_memory: >-
+          {{ _proxy_service_memory.stdout | service_memory(
+             ['squid.service', 'unbound.service', 'nginx.service']
+             + (['mtg.service'] if (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool) else [])
+             + (['keepalived.service'] if (proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined) else [])
+             + (['crowdsec.service', 'crowdsec-firewall-bouncer.service'] if crowdsec_enabled | default(false) | bool else [])) }}
+
+    - name: Require limits or an explicit reserve for foreign applications
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - _proxy_foreign_memory.unbounded | length == 0 or mem_foreign_reserved_mb | int > 0
+        fail_msg: "Unbounded foreign applications: {{ _proxy_foreign_memory.unbounded | join(', ') }}. Set limits or mem_foreign_reserved_mb."
+
+    - name: Calculate the system and foreign memory reserve
+      tags: [always]
+      ansible.builtin.set_fact:
+        mem_foreign_effective_mb: "{{ [_proxy_foreign_memory.reserved_mb, mem_foreign_reserved_mb | int] | max }}"
+        mem_system_reserved_mb: >-
+          {{ [mem_system_min_mb | int,
+              (ansible_memtotal_mb | int * (mem_reserve_when_shared_share | float if shared_host | bool else mem_reserve_share | float)) | round(0, 'ceil') | int] | max }}
+
+    - name: Calculate allocatable memory without exceeding physical RAM
+      tags: [always]
+      ansible.builtin.set_fact:
+        mem_allocatable_mb: >-
+          {{ [(ansible_memtotal_mb | int * mem_share_when_shared | float) | int,
+               ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int] | min
+             if shared_host | bool else ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int }}
+
+    - name: Calculate per-service memory limits
+      tags: [always]
+      ansible.builtin.set_fact:
+        mem_squid_mb: "{{ [(mem_allocatable_mb | int * mem_share_squid | float) | int, mem_min_squid | int] | max }}"
+        mem_unbound_mb: "{{ [(mem_allocatable_mb | int * mem_share_unbound | float) | int, mem_min_unbound | int] | max }}"
+        mem_nginx_mb: "{{ [(mem_allocatable_mb | int * mem_share_nginx | float) | int, mem_min_nginx | int] | max }}"
+        mem_mtproxy_mb: "{{ [(mem_allocatable_mb | int * mem_share_mtproxy | float) | int, mem_min_mtproxy | int] | max }}"
+        mem_keepalived_mb: "{{ [(mem_allocatable_mb | int * mem_share_keepalived | float) | int, mem_min_keepalived | int] | max }}"
+        mem_crowdsec_mb: "{{ crowdsec_memory_mb | default([(mem_allocatable_mb | int * mem_share_crowdsec | float) | int, mem_min_crowdsec | int] | max) }}"
+        mem_crowdsec_bouncer_mb: "{{ crowdsec_fw_bouncer_memory_mb | default([(mem_allocatable_mb | int * mem_share_crowdsec_bouncer | float) | int, mem_min_crowdsec_bouncer | int] | max) }}"
+
+    # Планируемая сумма — только те службы, что действительно разворачиваются
+    # на этом узле: набор различается для access и upstream
+    - name: Bound workers by the service memory budget
+      tags: [always]
+      ansible.builtin.set_fact:
+        squid_workers: "{{ [cpu_cores | int, [mem_squid_mb | int // 96, 1] | max] | min }}"
+        nginx_worker_connections: "{{ nginx_worker_connections | default([mem_nginx_mb | int // 96 * 512, 256] | max) }}"
+        proxy_nginx_workers: "{{ [cpu_cores | int, [mem_nginx_mb | int // 96, 1] | max] | min }}"
+
+    - name: Validate worker counts and nginx connections against memory
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - mem_squid_mb | int >= 96
+          - mem_unbound_mb | int >= 32
+          - mem_nginx_mb | int >= 96
+          - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_mb | int >= 192
+          - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_bouncer_mb | int >= 32
+          - squid_workers | int >= 1
+          - squid_workers | int * 96 <= mem_squid_mb | int
+          - proxy_nginx_workers | int * 96 <= mem_nginx_mb | int
+          - nginx_worker_connections | int <= [mem_nginx_mb | int // 96 * 512, 256] | max
+        fail_msg: "Worker/connection overrides exceed the service memory budget. Increase its budget or reduce the override."
+
+    - name: Sum planned memory limits for services deployed on this host
+      tags: [always]
+      ansible.builtin.set_fact:
+        mem_planned_mb: >-
+          {{ mem_squid_mb | int + mem_unbound_mb | int
+             + (mem_nginx_mb | int if (_proxy_nginx_needed | bool) else 0)
+             + (mem_mtproxy_mb | int if (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool) else 0)
+             + (mem_keepalived_mb | int if (proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined) else 0)
+             + ((mem_crowdsec_mb | int + mem_crowdsec_bouncer_mb | int) if (crowdsec_enabled | default(false) | bool) else 0) }}
+
+    # Проверка выполнимости плана. Отказ развёртывания, а не предупреждение:
+    # узел, где сумма пределов превышает выделяемый объём, уходит в отказ по
+    # памяти под нагрузкой — то есть тогда, когда обслуживание и нужно.
+    # Файл паролей ведётся оператором вне репозитория; пустой файл означает, что
+    # подключиться не сможет никто, а выглядеть это будет как неверные учётные данные
+    # у всех сразу. Проверяем до развёртывания, на управляющем хосте.
+    # Осмотр ожидаемого пути до чтения: при отказе чтения сообщение проверки
+    # ниже опирается на эти факты, а не на догадки. Содержимое не читается —
+    # в файле хеши паролей.
+    # =======================================================================
+    # Материал для шифрования участка access → upstream
+    # =======================================================================
+    # Выпускается на УПРАВЛЯЮЩЕЙ машине, а не на узле: обе стороны участка обязаны
+    # получить согласованный сертификат, а порядок обхода узлов плейбуком не определён —
+    # выпуск на upstream оставил бы access без доверенного материала при прогоне,
+    # начавшемся с access. Каталог исключён из контроля версий: в нём закрытый ключ.
+    - name: Assert memory plan fits the node
+      tags: [always]
+      ansible.builtin.assert:
+        that:
+          - mem_planned_mb | int <= mem_allocatable_mb | int
+          - mem_planned_mb | int + mem_foreign_effective_mb | int + mem_system_reserved_mb | int <= ansible_memtotal_mb | int
+        fail_msg: >-
+          План памяти не помещается на узле: сумма пределов служб
+          {{ mem_planned_mb }} МБ при выделяемом объёме {{ mem_allocatable_mb }} МБ
+          (RAM {{ ansible_memtotal_mb }} МБ, резерв ядра {{ (mem_reserve_share | float * 100) | int }}%,
+          отдано соседним проектам {{ mem_foreign_effective_mb }} МБ).
+          Варианты: увеличить RAM узла; отключить необязательные службы
+          (crowdsec_enabled, mtproxy_enabled); понизить доли mem_share_* в переменных.
+        success_msg: >-
+          План памяти помещается: {{ mem_planned_mb }} из {{ mem_allocatable_mb }} МБ
+          выделяемых (RAM {{ ansible_memtotal_mb }} МБ) — Squid {{ mem_squid_mb }},
+          unbound {{ mem_unbound_mb }}, nginx {{ mem_nginx_mb }},
+          MTProxy {{ mem_mtproxy_mb }}, CrowdSec {{ mem_crowdsec_mb }}+{{ mem_crowdsec_bouncer_mb }} МБ
+
+    # Both projects enforce the complete physical-RAM plan.
+    - name: Report the whole-node memory plan
+      tags: [always]
+      ansible.builtin.debug:
+        msg: "ai-proxy {{ mem_planned_mb }} MiB + foreign {{ mem_foreign_effective_mb }} MiB + OS {{ mem_system_reserved_mb }} MiB <= RAM {{ ansible_memtotal_mb }} MiB"
+
 
   tasks:
     # Обновление кеша пакетов
@@ -220,123 +427,6 @@
     # Вычисление ресурсных лимитов на основе CPU и RAM
     # CPU: используем все ядра
     # RAM: пределы служб — по бюджету памяти узла (доли и границы заданы в vars)
-    - name: Calculate resource limits
-      ansible.builtin.set_fact:
-        cpu_cores: "{{ ansible_processor_vcpus | default(1) }}"
-        ram_mb: "{{ ansible_memtotal_mb | default(2048) }}"
-        ram_for_proxy_mb: "{{ (ansible_memtotal_mb | default(2048) / 5) | int }}"
-        # Буферы сокетов: 1/20 от выделенной памяти на буфер (в байтах)
-        socket_buffer_bytes: "{{ ((ansible_memtotal_mb | default(2048) / 5 / 20) * 1024 * 1024) | int }}"
-        # Лимиты FD: 4096 на ядро, минимум 65535
-        fd_limit: "{{ [ansible_processor_vcpus | default(1) * 4096, 65535] | max }}"
-        # Очереди: 8192 на ядро, минимум 65535
-        queue_limit: "{{ [ansible_processor_vcpus | default(1) * 8192, 65535] | max }}"
-        # TIME_WAIT buckets: 32768 на ядро
-        tw_buckets: "{{ ansible_processor_vcpus | default(1) * 32768 }}"
-
-    # =======================================================================
-    # Обнаружение соседнего проекта на узле
-    # =======================================================================
-    # Признак снимается осмотром при каждом прогоне, а не берётся из объявленной
-    # переменной: узел мог стать общим уже после прошлого развёртывания.
-    # Осматриваются три каталога модульного nginx — по одному на контекст, куда
-    # соседний проект кладёт свои файлы. Собственные имена перечислены поимённо;
-    # всё, что не наше, принадлежит соседям.
-    - name: Найти чужие файлы в каталогах расширения nginx
-      ansible.builtin.find:
-        paths: "{{ item.path }}"
-        patterns: "*.conf"
-        excludes: "{{ item.own }}"
-        file_type: file
-        recurse: false
-      loop:
-        - path: /etc/nginx/stream.d
-          own: ["00-sni-router.conf", "10-aiproxy-*.conf", "10-mtproxy-tls.conf",
-                "20-squid-tls-term.conf"]
-        - path: /etc/nginx/stream.d/sni-map.d
-          own: ["aiproxy.conf", "mtproxy.conf", "squid.conf"]
-        - path: /etc/nginx/conf.d
-          own: ["default.conf"]
-      loop_control:
-        label: "{{ item.path }}"
-      register: _foreign_nginx_files
-      failed_when: false
-      changed_when: false
-
-    - name: Установить признак совместного размещения
-      ansible.builtin.set_fact:
-        # Объявленное shared_host: true остаётся ручным перекрытием и осмотром
-        # не отменяется; осмотр может только поднять признак.
-        shared_host: >-
-          {{ (shared_host | default(false) | bool)
-             or ((_foreign_nginx_files.results | default([])
-                  | map(attribute='files') | map('default', []) | list | flatten | length) > 0) }}
-        _shared_host_evidence: >-
-          {{ (_foreign_nginx_files.results | default([])
-              | map(attribute='files') | map('default', []) | list | flatten
-              | map(attribute='path') | list) }}
-
-    - name: Сообщить результат осмотра узла
-      ansible.builtin.debug:
-        msg: >-
-          Совместное размещение: {{ 'обнаружено' if (shared_host | bool) else 'не обнаружено' }}.
-          {{ 'Чужие файлы: ' ~ (_shared_host_evidence | join(', ')) if _shared_host_evidence | length > 0
-             else 'Чужих файлов в каталогах расширения nginx нет.' }}
-          Бюджет памяти: {{ (mem_share_when_shared | float * 100) | int if (shared_host | bool)
-             else ((1 - mem_reserve_share | float) * 100) | int }} % памяти узла.
-
-    # Пределы памяти служб: доля RAM, но не ниже нижней границы
-    # Выделяемый объём считается ПЕРВЫМ и отдельной задачей: от него зависят пределы
-    # служб, а значение факта, вычисленного в том же вызове set_fact, соседним
-    # выражениям того же вызова недоступно.
-    - name: Calculate allocatable memory
-      ansible.builtin.set_fact:
-        # Совместное размещение — своя объявленная доля узла; одиночное — всё за вычетом
-        # резерва ядра. Вычитание доли соседа больше не применяется: оно требовало
-        # знать его состав, а тот меняется без нашего ведома.
-        mem_allocatable_mb: >-
-          {{ ((ansible_memtotal_mb | default(2048) | int) * (mem_share_when_shared | float)) | int
-             if (shared_host | default(false) | bool)
-             else ((ansible_memtotal_mb | default(2048) | int) * (1 - mem_reserve_share | float)) | int
-                  - (mem_foreign_reserved_mb | int) }}
-
-    - name: Calculate per-service memory limits
-      ansible.builtin.set_fact:
-        mem_squid_mb: "{{ [(mem_allocatable_mb | int * mem_share_squid | float) | int, mem_min_squid | int] | max }}"
-        mem_unbound_mb: "{{ [(mem_allocatable_mb | int * mem_share_unbound | float) | int, mem_min_unbound | int] | max }}"
-        mem_nginx_mb: "{{ [(mem_allocatable_mb | int * mem_share_nginx | float) | int, mem_min_nginx | int] | max }}"
-        mem_mtproxy_mb: "{{ [(mem_allocatable_mb | int * mem_share_mtproxy | float) | int, mem_min_mtproxy | int] | max }}"
-        mem_keepalived_mb: "{{ [(mem_allocatable_mb | int * mem_share_keepalived | float) | int, mem_min_keepalived | int] | max }}"
-        mem_crowdsec_mb: "{{ crowdsec_memory_mb | default([(mem_allocatable_mb | int * mem_share_crowdsec | float) | int, mem_min_crowdsec | int] | max) }}"
-        mem_crowdsec_bouncer_mb: "{{ crowdsec_fw_bouncer_memory_mb | default([(mem_allocatable_mb | int * mem_share_crowdsec_bouncer | float) | int, mem_min_crowdsec_bouncer | int] | max) }}"
-
-    # Планируемая сумма — только те службы, что действительно разворачиваются
-    # на этом узле: набор различается для access и upstream
-    - name: Sum planned memory limits for services deployed on this host
-      ansible.builtin.set_fact:
-        mem_planned_mb: >-
-          {{ mem_squid_mb | int + mem_unbound_mb | int
-             + (mem_nginx_mb | int if (behind_nginx | default(false) | bool or mtproxy_enabled | default(false) | bool) else 0)
-             + (mem_mtproxy_mb | int if (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool) else 0)
-             + (mem_keepalived_mb | int if (proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined) else 0)
-             + ((mem_crowdsec_mb | int + mem_crowdsec_bouncer_mb | int) if (crowdsec_enabled | default(false) | bool) else 0) }}
-
-    # Проверка выполнимости плана. Отказ развёртывания, а не предупреждение:
-    # узел, где сумма пределов превышает выделяемый объём, уходит в отказ по
-    # памяти под нагрузкой — то есть тогда, когда обслуживание и нужно.
-    # Файл паролей ведётся оператором вне репозитория; пустой файл означает, что
-    # подключиться не сможет никто, а выглядеть это будет как неверные учётные данные
-    # у всех сразу. Проверяем до развёртывания, на управляющем хосте.
-    # Осмотр ожидаемого пути до чтения: при отказе чтения сообщение проверки
-    # ниже опирается на эти факты, а не на догадки. Содержимое не читается —
-    # в файле хеши паролей.
-    # =======================================================================
-    # Материал для шифрования участка access → upstream
-    # =======================================================================
-    # Выпускается на УПРАВЛЯЮЩЕЙ машине, а не на узле: обе стороны участка обязаны
-    # получить согласованный сертификат, а порядок обхода узлов плейбуком не определён —
-    # выпуск на upstream оставил бы access без доверенного материала при прогоне,
-    # начавшемся с access. Каталог исключён из контроля версий: в нём закрытый ключ.
     - name: Create local directory for transit TLS material
       ansible.builtin.file:
         path: "{{ playbook_dir }}/tls"
@@ -450,44 +540,6 @@
       delegate_to: localhost
       run_once: true
       when: proxy_role == 'access' and enable_auth | default(false) | bool
-
-    - name: Assert memory plan fits the node
-      ansible.builtin.assert:
-        that:
-          - mem_planned_mb | int <= mem_allocatable_mb | int
-        fail_msg: >-
-          План памяти не помещается на узле: сумма пределов служб
-          {{ mem_planned_mb }} МБ при выделяемом объёме {{ mem_allocatable_mb }} МБ
-          (RAM {{ ansible_memtotal_mb }} МБ, резерв ядра {{ (mem_reserve_share | float * 100) | int }}%,
-          отдано соседним проектам {{ mem_foreign_reserved_mb }} МБ).
-          Варианты: увеличить RAM узла; отключить необязательные службы
-          (crowdsec_enabled, mtproxy_enabled); понизить доли mem_share_* в переменных.
-        success_msg: >-
-          План памяти помещается: {{ mem_planned_mb }} из {{ mem_allocatable_mb }} МБ
-          выделяемых (RAM {{ ansible_memtotal_mb }} МБ) — Squid {{ mem_squid_mb }},
-          unbound {{ mem_unbound_mb }}, nginx {{ mem_nginx_mb }},
-          MTProxy {{ mem_mtproxy_mb }}, CrowdSec {{ mem_crowdsec_mb }}+{{ mem_crowdsec_bouncer_mb }} МБ
-
-    # Увеличение лимитов файловых дескрипторов (привязано к ядрам)
-    # Совместное размещение: каждый проект считает бюджет от полной памяти узла, поэтому
-    # при соседе на том же узле резерв под него обязан быть задан — иначе обе проверки
-    # бюджета проходят независимо, а сумма пределов превышает память узла.
-    # Проверка резерва памяти под соседа снята: этот проект — владелец узла
-    # и развёртывание из-за соседства не останавливает (директива владельца).
-    # Признак, на который она опиралась, соседом не являлся: маршрутизатор
-    # на порту 443 — собственная настройка проекта, и при выключенном MTProxy
-    # проверка остановила бы развёртывание одиночного узла сообщением
-    # о несуществующем соседе. Учёт чужой памяти ведёт соседний проект: он
-    # опрашивает узел о пределах наших служб и вычитает их из своего бюджета.
-    - name: Report memory budget when another project shares the host
-      ansible.builtin.debug:
-        msg: >-
-          На узле обнаружены признаки соседнего проекта. Бюджет памяти этого
-          проекта считается от полной памяти узла; резерв под соседа ведёт
-          он сам, вычитая пределы наших служб из своего бюджета.
-      when:
-        - nginx_on_443 | default(false) | bool
-        - not (mtproxy_enabled | default(false) | bool)
 
     - name: Configure system limits (ulimit)
       ansible.builtin.copy:
@@ -620,7 +672,7 @@
           # вытеснение и торможение, жёсткий предел — аварийный, он же величина
           # в сумме плана. Внутренние размеры Squid (cache_mem, memory_pools_limit)
           # рассчитаны от него же.
-          MemoryHigh={{ (mem_squid_mb | int * 0.8) | int }}M
+          MemoryHigh=infinity
           MemoryMax={{ mem_squid_mb }}M
         owner: root
         group: root
@@ -723,19 +775,26 @@
         owner: root
         group: root
         mode: '0755'
-      when: nginx_on_443 | default(false) | bool or (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool)
+      when: _proxy_nginx_needed | bool
+
+    - name: Remove the obsolete Matrix cap when taking ownership of shared nginx
+      ansible.builtin.file:
+        path: /etc/systemd/system/nginx.service.d/memory-limit.conf
+        state: absent
+      when: _proxy_nginx_needed | bool
+      notify: Reload systemd
 
     - name: Configure memory limit for nginx
       ansible.builtin.copy:
         dest: /etc/systemd/system/nginx.service.d/10-aiproxy-memory.conf
         content: |
           [Service]
-          MemoryHigh={{ (mem_nginx_mb | int * 0.8) | int }}M
+          MemoryHigh=infinity
           MemoryMax={{ mem_nginx_mb }}M
         owner: root
         group: root
         mode: '0644'
-      when: nginx_on_443 | default(false) | bool or (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool)
+      when: _proxy_nginx_needed | bool
       notify: Reload systemd
 
     - name: Create systemd override directory for unbound
@@ -752,7 +811,7 @@
         dest: /etc/systemd/system/unbound.service.d/memory-limit.conf
         content: |
           [Service]
-          MemoryHigh={{ (mem_unbound_mb | int * 0.8) | int }}M
+          MemoryHigh=infinity
           MemoryMax={{ mem_unbound_mb }}M
         owner: root
         group: root
@@ -1001,7 +1060,7 @@
     - name: Initialize Squid cache
       ansible.builtin.command: squid -z
       args:
-        creates: "{{ '/var/spool/squid/1/00' if (cpu_cores | int > 1) else '/var/spool/squid/00' }}"
+        creates: "{{ '/var/spool/squid/1/00' if (squid_workers | int > 1) else '/var/spool/squid/00' }}"
       when: enable_caching | default(false) | bool
 
     # ===========================================================================
@@ -1091,6 +1150,9 @@
             dns_firewall_backend: ufw
 
     # Настройка firewall (upstream) - nftables (Debian без ufw)
+    - name: Prepare the shared firewall integration
+      ansible.builtin.include_tasks: tasks/shared-firewall.yml
+
     - name: Configure nftables for upstream proxy (Debian)
       when: proxy_role == 'upstream' and ansible_distribution == 'Debian' and ufw_status.stdout | default('') != 'active'
       block:
@@ -1417,6 +1479,18 @@
         name: crowdsec
       when: crowdsec_enabled | default(false) | bool
       tags: [crowdsec, security]
+
+    - name: Record the active firewall backend for shared services
+      ansible.builtin.copy:
+        dest: /etc/shared-host/aiproxy-firewall-backend
+        mode: '0644'
+        content: "{{ 'ufw' if ufw_status.stdout | default('') == 'active' else dns_firewall_backend | default('unsupported') }}\n"
+
+    - name: Apply the persistent shared services port contract
+      ansible.builtin.command: /usr/local/sbin/aiproxy-apply-shared-ports
+      register: _shared_ports_applied
+      changed_when: "'CHANGED' in _shared_ports_applied.stdout"
+      when: not ansible_check_mode
 
   handlers:
     # Примечание: Squid restart выполняется inline в tasks

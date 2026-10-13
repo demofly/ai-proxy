@@ -203,7 +203,7 @@
     mode: "0644"
     content: |
       [Service]
-      MemoryHigh={{ (mem_crowdsec_mb | default(128) | int * 0.8) | int }}M
+      Environment=GOMEMLIMIT={{ (mem_crowdsec_mb | int * 0.65) | int }}MiB
       MemoryMax={{ mem_crowdsec_mb | default(128) }}M
   notify: Restart crowdsec
 
@@ -219,7 +219,7 @@
     mode: "0644"
     content: |
       [Service]
-      MemoryHigh={{ (mem_crowdsec_bouncer_mb | default(24) | int * 0.8) | int }}M
+      Environment=GOMEMLIMIT={{ (mem_crowdsec_bouncer_mb | int * 0.65) | int }}MiB
       MemoryMax={{ mem_crowdsec_bouncer_mb | default(24) }}M
   notify: Restart crowdsec-firewall-bouncer
 

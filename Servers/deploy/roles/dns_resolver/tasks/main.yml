@@ -10,10 +10,17 @@
 
 - name: Calculate unbound resource limits
   ansible.builtin.set_fact:
-    _dns_threads: "{{ dns_resolver_threads | default([ansible_processor_vcpus | default(1), 1] | max) }}"
-    # Кеши unbound — доля предела cgroup службы ({{ mem_unbound_mb | default('не задан') }} MB):
-    # msg + rrset(×2) + key дают около двух третей предела, остальное — рабочая память
-    _dns_cache_mb: "{{ dns_resolver_cache_mb | default([((mem_unbound_mb | default(32) | int) / 6) | int, 4] | max) }}"
+    _dns_threads: "{{ dns_resolver_threads | default([ansible_processor_vcpus | default(1) | int, [mem_unbound_mb | default(32) | int // 64, 1] | max] | min) }}"
+    # Four cache shares plus up to 2.5x malloc overhead; keep room for the resolver.
+    _dns_cache_mb: "{{ dns_resolver_cache_mb | default([((mem_unbound_mb | default(32) | int) / 24) | int, 1] | max) }}"
+
+- name: Validate resolver cache and thread overrides against memory
+  ansible.builtin.assert:
+    that:
+      - _dns_threads | int >= 1
+      - _dns_cache_mb | int >= 1
+      - _dns_cache_mb | int * 10 + _dns_threads | int * 4 + 8 <= mem_unbound_mb | int
+    fail_msg: "Unbound cache/thread overrides exceed the service budget (including malloc and base overhead)."
 
 # Обновление unbound перезапускает резолвер: на время перезапуска узел не
 # резолвит имена, а access-ноды — те, что форвардят на upstream, — теряют
