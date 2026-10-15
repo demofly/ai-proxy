@@ -56,6 +56,42 @@
     state: "{{ pkg_state }}"
   throttle: 1
 
+# SQLite connections each retain native/page-cache memory outside GOMEMLIMIT.
+# Preserve operator/neighbor settings while bounding the local SQLite pool.
+- name: Read CrowdSec base configuration
+  ansible.builtin.slurp:
+    src: /etc/crowdsec/config.yaml
+  register: _crowdsec_base_config
+  no_log: true
+
+- name: Check for existing CrowdSec local overrides
+  ansible.builtin.stat:
+    path: /etc/crowdsec/config.yaml.local
+  register: _crowdsec_local_config_file
+
+- name: Read existing CrowdSec local overrides
+  ansible.builtin.slurp:
+    src: /etc/crowdsec/config.yaml.local
+  register: _crowdsec_local_config_raw
+  when: _crowdsec_local_config_file.stat.exists
+  no_log: true
+
+- name: Preserve existing CrowdSec local configuration
+  ansible.builtin.set_fact:
+    _crowdsec_local_config: '{{ _crowdsec_local_config_raw.content | default("e30=") | b64decode | from_yaml | default({}, true) }}'
+  no_log: true
+
+- name: Bound the CrowdSec SQLite pool without replacing other local settings
+  ansible.builtin.copy:
+    dest: /etc/crowdsec/config.yaml.local
+    mode: '0600'
+    content: '{{ _crowdsec_local_config | combine({"db_config": {"max_open_conns": 1}}, recursive=true) | to_nice_yaml }}'
+  when: >-
+    ((_crowdsec_base_config.content | b64decode | from_yaml)
+     | combine(_crowdsec_local_config, recursive=true)).db_config.type == 'sqlite'
+  notify: Restart crowdsec
+  no_log: true
+
 # --- Install and upgrade collections (detection scenarios + parsers) ---
 #
 # Правила детектирования — самая быстро меняющаяся часть IPS, и обновляются они
@@ -203,8 +239,10 @@
     mode: "0644"
     content: |
       [Service]
-      Environment=GOMEMLIMIT={{ (mem_crowdsec_mb | int * 0.65) | int }}MiB
-      MemoryMax={{ mem_crowdsec_mb | default(128) }}M
+      # Go's soft limit excludes executable/file mappings and cgo memory.
+      # Keep 64 MiB outside it, rather than forcing hot pages out at small caps.
+      Environment=GOMEMLIMIT={{ [(mem_crowdsec_mb | int * 0.65) | int, mem_crowdsec_mb | int - 64] | min }}MiB
+      MemoryMax={{ mem_crowdsec_mb }}M
   notify: Restart crowdsec
 
 - name: Create systemd override directory for crowdsec-firewall-bouncer

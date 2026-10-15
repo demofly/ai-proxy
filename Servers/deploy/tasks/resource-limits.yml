@@ -19,7 +19,9 @@
   ansible.builtin.assert:
     that:
       - _proxy_resource_units | map(attribute='memory_mb') | map('int') | sum == mem_planned_mb | int
-      - mem_planned_mb | int <= proxy_memory_budget_mb | default(380) | int
+      - mem_planned_mb | int <= _proxy_budget.mb | int
+      - _proxy_budget.bytes | int <= ansible_memtotal_mb | int * 1048576 // 3
+      - _proxy_budget.bytes | int <= 1000000000
 
 - name: Deploy the aggregate project memory limit
   ansible.builtin.template:

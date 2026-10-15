@@ -3,7 +3,7 @@
 # marker records the last successful start, even if another role wrote squid.conf.
 - name: Read newly rendered Squid startup parameters
   ansible.builtin.command:
-    argv: [grep, -E, '^(http_port|https_port|cache_dir|workers)[[:space:]]', '{{ squid_config_path }}']
+    argv: [grep, -E, '^(http_port|https_port|cache_dir|workers|max_filedescriptors)[[:space:]]', '{{ squid_config_path }}']
   register: _squid_startup_parameters
   changed_when: false
 
@@ -39,7 +39,7 @@
       {{ squid_config_access.changed | default(false) or squid_config_upstream.changed | default(false)
          or _squid_config_deployed.changed | default(false) }}
 
-- name: Stop Squid before changing workers, listeners or cache layout
+- name: Stop Squid before changing workers, FD tables, listeners or cache layout
   ansible.builtin.systemd:
     name: squid
     state: stopped

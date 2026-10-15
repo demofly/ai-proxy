@@ -7,7 +7,7 @@ bind-to = "127.0.0.1:{{ mtproxy_local_port }}"
 
 # Fake-TLS hostname is encoded in the secret; mtg v2 has no fake-tls key.
 # Bound accepted sessions before the daemon can exhaust its FD/RAM budget.
-concurrency = {{ mtproxy_max_connections | default(64) | int }}
+concurrency = {{ mtproxy_effective_max_connections | default(mtproxy_max_connections | default(64)) | int }}
 [network]
 [network.timeout]
 idle = "5m"

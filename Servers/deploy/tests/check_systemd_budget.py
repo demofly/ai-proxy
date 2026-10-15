@@ -45,7 +45,8 @@ def main():
             fixture = Path(temp)/'play.yml'
             fixture.write_text(yaml.safe_dump([dict(hosts='localhost', gather_facts=False,
                 vars=dict(_proxy_resource_units=[{'name':unit, 'memory_mb':64}],
-                          mem_planned_mb=64, proxy_memory_budget_mb=380), tasks=tasks)], sort_keys=False))
+                          mem_planned_mb=64, ansible_memtotal_mb=900,
+                          _proxy_budget={'mb':300, 'bytes':300*1048576}), tasks=tasks)], sort_keys=False))
             result = subprocess.run(['ansible-playbook', '-i', 'localhost,', '-c', 'local', str(fixture)],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             if result.returncode:
@@ -58,7 +59,7 @@ def main():
         subprocess.run(['systemctl', 'restart', unit], check=True)
         group = run('systemctl', 'show', unit, '-p', 'ControlGroup', '--value')
         assert group.startswith('/'+slice_name+'/'), group
-        assert int((Path('/sys/fs/cgroup')/slice_name/'memory.max').read_text()) == 380*1048576
+        assert int((Path('/sys/fs/cgroup')/slice_name/'memory.max').read_text()) == 300*1048576
         print('Next normal restart enters the capped project slice')
         # Exercise the deployment's actual stop/init/start versus reload logic.
         class Manager(BaseHTTPRequestHandler):
@@ -84,9 +85,12 @@ def main():
                         task['ansible.builtin.systemd']['name'] = unit
                 fixture = temp/'apply.yml'
                 for case, restart, change in [('initial',True,False), ('unchanged',False,False),
-                                               ('new-workers',True,False), ('acl-only',False,True)]:
+                                               ('new-workers',True,False), ('new-fd-limit',True,False),
+                                               ('acl-only',False,True)]:
                     if case == 'new-workers':
                         configuration.write_text('http_port 127.0.0.1:12345\nworkers 2\n')
+                    if case == 'new-fd-limit':
+                        configuration.write_text('http_port 127.0.0.1:12345\nworkers 2\nmax_filedescriptors 12288\n')
                     pid = run('systemctl', 'show', unit, '-p', 'MainPID', '--value')
                     fixture.write_text(yaml.safe_dump([dict(hosts='localhost', gather_facts=False,
                         vars=dict(squid_config_path=str(configuration), squid_workers=1, enable_caching=False,

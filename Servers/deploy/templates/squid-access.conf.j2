@@ -246,7 +246,7 @@ shutdown_lifetime 3 seconds
 # Предел числа дескрипторов задаётся и здесь, а не только через systemd
 # и limits.d: иначе действующее значение не видно в конфигурации службы,
 # и расхождение с пределом узла обнаруживается лишь под нагрузкой.
-max_filedescriptors {{ fd_limit | default(65535) }}
+max_filedescriptors {{ squid_fd_limit | default(fd_limit | default(65535)) }}
 
 workers {{ squid_workers }}
 

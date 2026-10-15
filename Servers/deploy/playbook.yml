@@ -54,19 +54,8 @@
     # проекты. Остаток нужен ядру, страничному кешу, sshd и журналу: без него
     # узел уходит в отказ раньше, чем сработает предел любой отдельной службы.
     #
-    # OS/foreign reserves remain separate from the hard project cap.
-    # Complete upstream profile = 380 MiB (398458880 bytes, below 400 MB).
-    # Inventory proxy_memory_limits overrides individual caps; the sum is checked.
-    _proxy_default_memory_limits:
-      squid: 64
-      unbound: 24
-      nginx: 48
-      mtg: 32
-      keepalived: 12
-      crowdsec: 172
-      crowdsec_bouncer: 24
-      haveged: 8
-      health: 8
+    # Resource policy: at most one third of host RAM and 1000000000 bytes.
+    # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
     - name: Refresh hardware facts before resource planning
@@ -78,7 +67,7 @@
       tags: [always]
       ansible.builtin.set_fact:
         mem_reserve_share: '{{ mem_reserve_share | default(0.25) }}'
-        # The explicit 400 MB project cap plus measured foreign limits replaces
+        # The RAM/3 project cap plus measured foreign limits replaces
         # the old arbitrary 35% split. An operator can still request a lower share.
         mem_share_when_shared: '{{ mem_share_when_shared | default(1.0) }}'
         mem_system_min_mb: '{{ mem_system_min_mb | default(128) }}'
@@ -192,9 +181,8 @@
           - mem_share_when_shared | float > 0 and mem_share_when_shared | float <= 1
           - mem_foreign_reserved_mb | int >= 0
           - mem_system_min_mb | int >= 128
-          - proxy_memory_budget_mb | default(380) | int > 0
-          - proxy_memory_budget_mb | default(380) | int <= 381
-        fail_msg: 'Invalid resource reserves or project cap. proxy_memory_budget_mb is in MiB and must be 1..381 to stay below 400000000 bytes (default 380).'
+          - proxy_memory_budget_mb | default(1) | int > 0
+        fail_msg: 'Invalid resource reserves or project cap. An optional proxy_memory_budget_mb must be positive; RAM/3 and 1000000000 bytes remain hard upper bounds.'
 
     - name: Collect current service memory limits
       tags: [always]
@@ -229,28 +217,48 @@
           {{ [mem_system_min_mb | int,
               (ansible_memtotal_mb | int * (mem_reserve_when_shared_share | float if shared_host | bool else mem_reserve_share | float)) | round(0, 'ceil') | int] | max }}
 
+    - name: Calculate the host-derived project ceiling
+      tags: [always]
+      ansible.builtin.set_fact:
+        _proxy_budget: '{{ ansible_memtotal_mb | proxy_memory_budget(proxy_memory_budget_mb | default(none)) }}'
+
     - name: Calculate allocatable memory without exceeding physical RAM
       tags: [always]
       ansible.builtin.set_fact:
         mem_allocatable_mb: >-
-          {{ [proxy_memory_budget_mb | default(380) | int,
+          {{ [_proxy_budget.mb | int,
               (ansible_memtotal_mb | int * mem_share_when_shared | float) | int,
                ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int] | min
-             if shared_host | bool else [proxy_memory_budget_mb | default(380) | int,
+             if shared_host | bool else [_proxy_budget.mb | int,
                ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int] | min }}
+        _proxy_enabled_services: >-
+          {{ ['squid', 'unbound', 'haveged', 'health']
+             + (['nginx'] if _proxy_nginx_needed | bool else [])
+             + (['mtg'] if proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool else [])
+             + (['keepalived'] if proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined else [])
+             + (['crowdsec', 'crowdsec_bouncer'] if crowdsec_enabled | default(false) | bool else []) }}
+
+    - name: Distribute the project budget across enabled services
+      tags: [always]
+      ansible.builtin.set_fact:
+        _proxy_memory_plan: >-
+          {{ mem_allocatable_mb | proxy_memory_plan(_proxy_enabled_services,
+             (proxy_memory_limits | default({}))
+             | combine({'crowdsec': crowdsec_memory_mb} if crowdsec_memory_mb is defined else {})
+             | combine({'crowdsec_bouncer': crowdsec_fw_bouncer_memory_mb} if crowdsec_fw_bouncer_memory_mb is defined else {})) }}
 
     - name: Calculate per-service memory limits
       tags: [always]
       ansible.builtin.set_fact:
-        mem_squid_mb: "{{ proxy_memory_limits.squid | default(_proxy_default_memory_limits.squid) }}"
-        mem_unbound_mb: "{{ proxy_memory_limits.unbound | default(_proxy_default_memory_limits.unbound) }}"
-        mem_nginx_mb: "{{ proxy_memory_limits.nginx | default(_proxy_default_memory_limits.nginx) }}"
-        mem_mtproxy_mb: "{{ proxy_memory_limits.mtg | default(_proxy_default_memory_limits.mtg) }}"
-        mem_keepalived_mb: "{{ proxy_memory_limits.keepalived | default(_proxy_default_memory_limits.keepalived) }}"
-        mem_crowdsec_mb: "{{ crowdsec_memory_mb | default(proxy_memory_limits.crowdsec | default(_proxy_default_memory_limits.crowdsec)) }}"
-        mem_crowdsec_bouncer_mb: "{{ crowdsec_fw_bouncer_memory_mb | default(proxy_memory_limits.crowdsec_bouncer | default(_proxy_default_memory_limits.crowdsec_bouncer)) }}"
-        mem_haveged_mb: "{{ proxy_memory_limits.haveged | default(_proxy_default_memory_limits.haveged) }}"
-        mem_health_mb: "{{ proxy_memory_limits.health | default(_proxy_default_memory_limits.health) }}"
+        mem_squid_mb: '{{ _proxy_memory_plan.limits.squid }}'
+        mem_unbound_mb: '{{ _proxy_memory_plan.limits.unbound }}'
+        mem_nginx_mb: '{{ _proxy_memory_plan.limits.nginx }}'
+        mem_mtproxy_mb: '{{ _proxy_memory_plan.limits.mtg }}'
+        mem_keepalived_mb: '{{ _proxy_memory_plan.limits.keepalived }}'
+        mem_crowdsec_mb: '{{ _proxy_memory_plan.limits.crowdsec }}'
+        mem_crowdsec_bouncer_mb: '{{ _proxy_memory_plan.limits.crowdsec_bouncer }}'
+        mem_haveged_mb: '{{ _proxy_memory_plan.limits.haveged }}'
+        mem_health_mb: '{{ _proxy_memory_plan.limits.health }}'
 
     # Планируемая сумма — только те службы, что действительно разворачиваются
     # на этом узле: набор различается для access и upstream
@@ -260,6 +268,9 @@
         squid_workers: "{{ [cpu_cores | int, [mem_squid_mb | int // 64, 1] | max] | min }}"
         nginx_worker_connections: "{{ nginx_worker_connections | default(512) }}"
         proxy_nginx_workers: "{{ [cpu_cores | int, [mem_nginx_mb | int // 48, 1] | max] | min }}"
+        mtproxy_effective_max_connections: "{{ [mtproxy_max_connections | default(64) | int, (mem_mtproxy_mb | int - 16) * 8, (4096 - 256) // 4] | min }}"
+        squid_fd_limit: "{{ [fd_limit | int, [4096, (mem_squid_mb | int - 16) * 256] | max] | min }}"
+        proxy_effective_max_connections: "{{ [proxy_max_connections | default(96) | int, (mem_squid_mb | int - 24) * 6] | min }}"
 
     - name: Validate worker counts and nginx connections against memory
       tags: [always]
@@ -272,17 +283,18 @@
           - mem_haveged_mb | int >= 8
           - mem_health_mb | int >= 8
           - mem_keepalived_mb | int >= 12
-          - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_mb | int >= 128
+          - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_mb | int >= 192
           - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_bouncer_mb | int >= 24
           - squid_workers | int >= 1
           - squid_workers | int * 64 <= mem_squid_mb | int
           - proxy_nginx_workers | int * 48 <= mem_nginx_mb | int
-          - nginx_worker_connections | int <= mem_nginx_mb | int // 48 * 512
+          - nginx_worker_connections | int <= 512
           - proxy_max_connections | default(96) | int >= 1
-          - proxy_max_connections | default(96) | int * 4 + 128 <= nginx_worker_connections | int * proxy_nginx_workers | int
+          - proxy_effective_max_connections | int >= 1
+          - proxy_effective_max_connections | int * 4 + 128 <= nginx_worker_connections | int * proxy_nginx_workers | int
           - mtproxy_max_connections | default(64) | int >= 1
-          - mtproxy_max_connections | default(64) | int <= (mem_mtproxy_mb | int - 16) * 8
-          - mtproxy_max_connections | default(64) | int * 4 + 256 <= 4096
+          - mtproxy_effective_max_connections | int <= (mem_mtproxy_mb | int - 16) * 8
+          - mtproxy_effective_max_connections | int * 4 + 256 <= 4096
           - read_timeout | default('1 hour') | squid_duration_seconds > 0
           - client_lifetime | default('1 day') | squid_duration_seconds > read_timeout | default('1 hour') | squid_duration_seconds
         fail_msg: 'Invalid service/worker/connection budget or timeout policy. Check proxy_memory_limits, proxy_max_connections, mtproxy_max_connections and read_timeout < client_lifetime.'
@@ -318,25 +330,35 @@
       ansible.builtin.assert:
         that:
           - mem_planned_mb | int <= mem_allocatable_mb | int
+          - mem_planned_mb | int == _proxy_memory_plan.total_mb | int
           - mem_planned_mb | int + mem_foreign_effective_mb | int + mem_system_reserved_mb | int <= ansible_memtotal_mb | int
         fail_msg: >-
           План памяти не помещается на узле: сумма пределов служб
-          {{ mem_planned_mb }} МБ при выделяемом объёме {{ mem_allocatable_mb }} МБ
-          (RAM {{ ansible_memtotal_mb }} МБ, резерв ядра {{ (mem_reserve_share | float * 100) | int }}%,
-          отдано соседним проектам {{ mem_foreign_effective_mb }} МБ).
-          Варианты: увеличить RAM узла; отключить необязательные службы
-          (crowdsec_enabled, mtproxy_enabled); согласовать proxy_memory_limits с общим бюджетом.
+          {{ mem_planned_mb }} МиБ при выделяемом объёме {{ mem_allocatable_mb }} МиБ.
+          Минимумы и явно заданные пределы требуют {{ _proxy_memory_plan.minimum_mb }} МиБ;
+          они не снижаются ради размещения на узле.
+          Потолок min(RAM/3, 1 GB) с учётом inventory — {{ _proxy_budget.bytes }} байт;
+          RAM {{ ansible_memtotal_mb }} МиБ, резерв ОС {{ mem_system_reserved_mb }} МиБ,
+          резерв соседей {{ mem_foreign_effective_mb }} МиБ.
+          Увеличьте RAM или пересмотрите размещение и явные переопределения пределов,
+          сохраняя минимумы служб из filter_plugins/resources.py.
         success_msg: >-
-          План памяти помещается: {{ mem_planned_mb }} из {{ mem_allocatable_mb }} МБ
-          выделяемых (RAM {{ ansible_memtotal_mb }} МБ) — Squid {{ mem_squid_mb }},
+          План памяти помещается: {{ mem_planned_mb }} из {{ mem_allocatable_mb }} МиБ
+          выделяемых (RAM {{ ansible_memtotal_mb }} МиБ) — Squid {{ mem_squid_mb }},
           unbound {{ mem_unbound_mb }}, nginx {{ mem_nginx_mb }},
-          MTProxy {{ mem_mtproxy_mb }}, CrowdSec {{ mem_crowdsec_mb }}+{{ mem_crowdsec_bouncer_mb }} МБ
+          MTProxy {{ mem_mtproxy_mb }}, CrowdSec {{ mem_crowdsec_mb }}+{{ mem_crowdsec_bouncer_mb }} МиБ
 
     # Both projects enforce the complete physical-RAM plan.
     - name: Report the whole-node memory plan
       tags: [always]
       ansible.builtin.debug:
-        msg: "ai-proxy {{ mem_planned_mb }} MiB + foreign {{ mem_foreign_effective_mb }} MiB + OS {{ mem_system_reserved_mb }} MiB <= RAM {{ ansible_memtotal_mb }} MiB"
+        msg: >-
+          ai-proxy {{ mem_planned_mb }} MiB <= RAM/3 with 1 GB cap ({{ _proxy_budget.bytes }} bytes);
+          foreign {{ mem_foreign_effective_mb }} MiB + OS {{ mem_system_reserved_mb }} MiB;
+          host {{ ansible_memtotal_mb }} MiB. MTProxy effective sessions
+          {{ mtproxy_effective_max_connections }} (inventory ceiling {{ mtproxy_max_connections | default(64) }}).
+          TLS transit effective sessions {{ proxy_effective_max_connections }}
+          (inventory ceiling {{ proxy_max_connections | default(96) }}), Squid FD {{ squid_fd_limit }}.
 
 
   tasks:
@@ -692,13 +714,11 @@
         dest: /etc/systemd/system/squid.service.d/limits.conf
         content: |
           [Service]
-          # Лимиты привязаны к ядрам: {{ fd_limit }} (4096 на ядро, мин 65535)
-          LimitNOFILE={{ fd_limit }}
+          # FD tables consume memory; scale their size within Squid's budget.
+          LimitNOFILE={{ squid_fd_limit }}
           LimitNPROC={{ fd_limit }}
-          # Бюджет памяти узла: на мягком пороге (80% предела) ядро включает
-          # вытеснение и торможение, жёсткий предел — аварийный, он же величина
-          # в сумме плана. Внутренние размеры Squid (cache_mem, memory_pools_limit)
-          # рассчитаны от него же.
+          # Жёсткий предел входит в общую проверенную сумму плана.
+          # Отдельного мягкого порога вытеснения нет.
           MemoryHigh=infinity
           MemoryMax={{ mem_squid_mb }}M
           TimeoutStopSec=30s

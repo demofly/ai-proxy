@@ -2,6 +2,64 @@
 import math
 import re
 
+MIB = 1048576
+PROXY_MEMORY_FLOORS = {'squid': 64, 'unbound': 24, 'nginx': 48, 'mtg': 32,
+                       'crowdsec': 192, 'crowdsec_bouncer': 24,
+                       'haveged': 8, 'health': 8, 'keepalived': 12}
+# Growth above the tested service floors; the floors are never scaled down.
+PROXY_MEMORY_WEIGHTS = {'squid': 32, 'nginx': 24, 'mtg': 8,
+                        'crowdsec': 12, 'crowdsec_bouncer': 4}
+
+
+def proxy_memory_budget(ram_mb, limit_mb=None):
+    """RAM/3, capped at exactly 1 GB; an optional inventory limit can lower it."""
+    ram_mb = int(ram_mb)
+    if ram_mb <= 0:
+        raise ValueError('Host RAM must be positive')
+    ceiling = min(ram_mb * MIB // 3, 1_000_000_000)
+    if limit_mb is not None:
+        if int(limit_mb) <= 0:
+            raise ValueError('proxy_memory_budget_mb must be positive')
+        ceiling = min(ceiling, int(limit_mb) * MIB)
+    return {'bytes': ceiling, 'mb': ceiling // MIB}
+
+
+def proxy_memory_plan(available_mb, enabled, overrides=None):
+    """Allocate whole MiB to enabled services without inflating the budget.
+
+    Explicit per-service values are held fixed; only automatic limits grow.
+    Insufficient budgets return the minimum plan with fits=False for preflight.
+    Largest-remainder distribution keeps rounding from overshooting the total.
+    """
+    available_mb = int(available_mb)
+    enabled = list(dict.fromkeys(enabled))
+    overrides = dict(overrides or {})
+    unknown = set(enabled) | set(overrides)
+    unknown -= PROXY_MEMORY_FLOORS.keys()
+    if unknown:
+        raise ValueError('Unknown ai-proxy services: '+', '.join(sorted(unknown)))
+    limits = dict(PROXY_MEMORY_FLOORS)
+    for name, value in overrides.items():
+        value = int(value)
+        if value < PROXY_MEMORY_FLOORS[name]:
+            raise ValueError(f'{name} needs at least {PROXY_MEMORY_FLOORS[name]} MiB')
+        limits[name] = value
+    minimum = sum(limits[name] for name in enabled)
+    spare = max(0, available_mb - minimum)
+    weights = {name: PROXY_MEMORY_WEIGHTS.get(name, 0)
+               for name in enabled if name not in overrides}
+    weight_sum = sum(weights.values())
+    if weight_sum and spare:
+        for name, weight in weights.items():
+            limits[name] += spare * weight // weight_sum
+        remaining = available_mb - sum(limits[name] for name in enabled)
+        order = sorted(weights, key=lambda n: (-(spare * weights[n] % weight_sum), n))
+        for name in order[:remaining]:
+            limits[name] += 1
+    total = sum(limits[name] for name in enabled)
+    return {'limits': limits, 'minimum_mb': minimum, 'total_mb': total,
+            'fits': total <= available_mb}
+
 
 def squid_duration_seconds(value):
     """Parse the time units accepted by our inventory/Squid timeout settings."""
@@ -113,6 +171,8 @@ def postgres_resource_plan(memory, users, pool_max=None, pool_min=2):
 class FilterModule:
     def filters(self):
         return {"squid_duration_seconds": squid_duration_seconds,
+                "proxy_memory_budget": proxy_memory_budget,
+                "proxy_memory_plan": proxy_memory_plan,
                 "service_memory": service_memory, "postgres_cluster": postgres_cluster,
                 "matrix_memory_plan": matrix_memory_plan,
                 "postgres_resource_plan": postgres_resource_plan}

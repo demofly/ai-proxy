@@ -127,7 +127,7 @@ shutdown_lifetime 3 seconds
 
 # SMP - использование всех ядер CPU
 # Предел числа дескрипторов наблюдаем в конфигурации, а не только в окружении.
-max_filedescriptors {{ fd_limit | default(65535) }}
+max_filedescriptors {{ squid_fd_limit | default(fd_limit | default(65535)) }}
 
 workers {{ squid_workers }}
 

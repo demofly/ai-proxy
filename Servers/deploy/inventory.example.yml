@@ -54,20 +54,16 @@ all:
         squid_local_port: 3128
 
   vars:
-    # Complete per-node deployment, including shared nginx and local CrowdSec.
-    # 380 MiB = 398458880 bytes (<400 MB); swap is disabled for this slice.
-    proxy_memory_budget_mb: 380
-    proxy_memory_limits:
-      squid: 64
-      unbound: 24
-      nginx: 48
-      mtg: 32
-      crowdsec: 172
-      crowdsec_bouncer: 24
-      haveged: 8
-      health: 8
-      keepalived: 12
-    # Combined sessions on ai-proxy TLS transit servers only, not Matrix.
+    # Automatically min(host RAM / 3, 1000000000 bytes), including shared
+    # nginx and local CrowdSec. Individual limits adapt to the enabled services.
+    # Optional LOWER project ceiling in MiB; cannot raise the host-derived cap:
+    # proxy_memory_budget_mb: 400
+    # Optional partial service overrides in MiB; remaining services stay automatic:
+    # Hard floors are enforced; deployment fails if they do not fit RAM/3.
+    # proxy_memory_limits:
+    #   crowdsec: 192
+    # Upper ceiling on ai-proxy TLS transit sessions only, not Matrix.
+    # Effective capacity may be lower depending on the allocated service memory.
     # Four nginx connection slots/session; 128 slots reserved at 512 total.
     proxy_max_connections: 96
 
@@ -173,12 +169,11 @@ all:
     # TI-фиды от сообщества (70k+ серверов) подключаются автоматически через CAPI
     crowdsec_enabled: true
 
-    # Пределы заданы в proxy_memory_limits выше и входят в общий жёсткий бюджет.
+    # Пределы рассчитываются автоматически и входят в общий жёсткий бюджет.
     # Значения ниже — необязательное переопределение; заданные вручную, они входят
     # в проверку выполнимости наравне с расчётными и могут её не пройти на малом узле.
     # Legacy overrides are still accepted and included in the same sum:
-    # crowdsec_memory_mb: 172
-    # crowdsec_fw_bouncer_memory_mb: 24
+    # Prefer partial proxy_memory_limits overrides instead of the legacy names.
 
     # Память, отданная соседним проектам на общем узле (0 — узел только наш).
     # На узле, где рядом развёрнут другой проект, укажите его бюджет: иначе оба
@@ -234,7 +229,8 @@ all:
     # в отслеживаемые файлы не вносится.
     mtproxy_secret: ""
 
-    # Общий предел сессий mtg (не на IP); проверяется против RAM и FD.
+    # Верхний предел сессий mtg (не на IP); фактическое число уменьшается
+    # автоматически при недостаточном бюджете RAM/FD и выводится в плане.
     mtproxy_max_connections: 100
 
     mtproxy_users:

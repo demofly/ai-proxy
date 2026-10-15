@@ -18,6 +18,7 @@ import socket
 import socketserver
 import ssl
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.request
@@ -51,10 +52,10 @@ def main():
     args = argparse.ArgumentParser()
     args.add_argument('--cache', type=Path, required=True)
     args.add_argument('--idle-seconds', type=int, default=70)
+    args.add_argument('--ram-mib', type=int, default=1200)
     opts = args.parse_args()
     cache = opts.cache
-    work = cache/f'run-{os.getpid()}'
-    work.mkdir(mode=0o777)
+    work = Path(tempfile.mkdtemp(prefix=f'run-{os.getpid()}-', dir=cache))
     work.chmod(0o777)
     subprocess.run(['ip', 'link', 'set', 'lo', 'up'], check=True)
     lib = cache/'root/usr/lib/x86_64-linux-gnu'
@@ -62,9 +63,17 @@ def main():
     squid = cache/'root/usr/sbin/squid'
     nginx = cache/'root/usr/sbin/nginx'
     mtg = next((cache/'mtg').glob('*/mtg'))
+    budget = resources.proxy_memory_budget(opts.ram_mib)
+    plan = resources.proxy_memory_plan(budget['mb'],
+        ['squid', 'unbound', 'nginx', 'mtg', 'crowdsec', 'crowdsec_bouncer', 'haveged', 'health'])
+    assert plan['fits'], plan
+    limits = plan['limits']
+    concurrency = min(100, (limits['mtg']-16)*8, (4096-256)//4)
+    transit_capacity = min(96, (limits['squid']-24)*6)
+    print('Host RAM MiB:', opts.ram_mib, 'budget:', budget, 'service limits:', limits, flush=True)
     cgroup = Path('/sys/fs/cgroup')/f'aiproxytest{os.getpid()}'
     cgroup.mkdir()
-    (cgroup/'memory.max').write_text(str(380*1048576))
+    (cgroup/'memory.max').write_text(str(budget['bytes']))
     (cgroup/'memory.swap.max').write_text('0')
     (cgroup/'cgroup.subtree_control').write_text('+memory')
     processes = []
@@ -96,15 +105,17 @@ def main():
     passwd.write_text('native:'+crypt.crypt('test-password', crypt.mksalt(crypt.METHOD_SHA512))+'\n')
     common = dict(ansible_managed='Native isolated fixture', inventory_hostname='test', ansible_host='127.0.0.1',
                   cpu_cores=1, ansible_processor_vcpus=1, squid_workers=1, fd_limit=65535,
+                  squid_fd_limit=min(65535, max(4096, (limits['squid']-16)*256)),
                   enable_caching=False, enable_logging=False, nginx_on_443=True, squid_transit_tls=True,
-                  mem_squid_mb=64, squid_tls_sni='transit.internal', allowed_domains=[], allowed_domain_patterns=[],
+                  mem_squid_mb=limits['squid'], squid_tls_sni='transit.internal', allowed_domains=[], allowed_domain_patterns=[],
                   groups={'access_proxies':['access'], 'upstreams':['up']},
                   hostvars={'access': {'ansible_host':'192.0.2.1'},
                             'up':{'ansible_host':'127.0.0.1', 'squid_port':443, 'mtproxy_enabled':True}},
                   squid_local_port=3128, squid_mgmt_port=3129, enable_auth=False,
                   mtproxy_local_port=2083, squid_tls_term_port=4444,
                   mtproxy_tls_port=4443, mtproxy_relay_port=9443, mtproxy_hostname='',
-                  mtproxy_fake_tls_domain='example.com', proxy_max_connections=96)
+                  mtproxy_fake_tls_domain='example.com', proxy_max_connections=96,
+                  proxy_effective_max_connections=transit_capacity)
     # End-user and access-node identities intentionally do not reach upstream Squid.
     upstream = render('templates/squid-upstream.conf.j2', common)
     access_values = dict(common, squid_local_port=3228, squid_mgmt_port=3229, enable_auth=True,
@@ -182,13 +193,16 @@ def main():
     threading.Thread(target=origin.serve_forever, daemon=True).start()
     try:
         cs_distribution = next((cache/'crowdsec').glob('crowdsec-v*'))
+        cs_config = yaml.safe_load((cache/'crowdsec-test/config.yaml').read_text())
+        cs_config['db_config']['max_open_conns'] = 1
+        (cache/'crowdsec-test/config.yaml').write_text(yaml.safe_dump(cs_config))
         launch('crowdsec', [cs_distribution/'cmd/crowdsec/crowdsec', '-c',
-                           cache/'crowdsec-test/config.yaml'], 172,
-               dict(os.environ, GOMEMLIMIT='111MiB'))
+                           cache/'crowdsec-test/config.yaml'], limits['crowdsec'],
+               dict(os.environ, GOMEMLIMIT=f"{min(int(limits['crowdsec']*.65), limits['crowdsec']-64)}MiB"))
         wait_port(18080)
         bouncer = next(p for p in (cache/'bouncer').rglob('crowdsec-firewall-bouncer') if p.is_file())
-        launch('bouncer', [bouncer, '-c', cache/'crowdsec-test/bouncer.yaml'], 24,
-               dict(os.environ, GOMEMLIMIT='15MiB'))
+        launch('bouncer', [bouncer, '-c', cache/'crowdsec-test/bouncer.yaml'], limits['crowdsec_bouncer'],
+               dict(os.environ, GOMEMLIMIT=f"{int(limits['crowdsec_bouncer']*.65)}MiB"))
         dns_values = dict(common, proxy_role='upstream', ansible_host='127.0.0.2', _dns_threads=1, _dns_cache_mb=1,
                           dns_resolver_port=1053, dns_resolver_dnssec=False,
                           _dns_allowed_clients=['192.0.2.1'], _dns_forwarders=['127.0.0.1@2053'])
@@ -196,7 +210,7 @@ def main():
         unbound_conf += f'\nserver:\n    username: ""\n    chroot: ""\n    directory: "{work}"\n    pidfile: "{work}/unbound.pid"\n'
         (work/'unbound.conf').write_text(unbound_conf)
         checked([cache/'root/usr/sbin/unbound-checkconf', work/'unbound.conf'])
-        launch('unbound', [cache/'root/usr/sbin/unbound', '-d', '-c', work/'unbound.conf'], 24)
+        launch('unbound', [cache/'root/usr/sbin/unbound', '-d', '-c', work/'unbound.conf'], limits['unbound'])
         wait_port(1053)
         for _ in range(100):
             if 'Starting tail' in (work/'crowdsec.log').read_text():
@@ -207,9 +221,9 @@ def main():
         with (cache/'crowdsec-test/auth.log').open('a') as log:
             for i in range(2000):
                 log.write(time.strftime('%b %d %H:%M:%S')+f' test sshd[1234]: Failed password for invalid user probe from 198.51.100.{i%200+1} port 12345 ssh2\n')
-        launch('squid-up', [squid, '-n', 'aiproxytestup', '-N', '-f', work/'up.conf'], 64)
-        launch('squid-access', [squid, '-n', 'aiproxytestaccess', '-N', '-f', work/'access.conf'], 64)
-        launch('nginx', [nginx, '-c', work/'nginx.conf', '-p', work, '-g', 'daemon off;'], 48)
+        launch('squid-up', [squid, '-n', 'aiproxytestup', '-N', '-f', work/'up.conf'], limits['squid'])
+        launch('squid-access', [squid, '-n', 'aiproxytestaccess', '-N', '-f', work/'access.conf'], limits['squid'])
+        launch('nginx', [nginx, '-c', work/'nginx.conf', '-p', work, '-g', 'daemon off;'], limits['nginx'])
         wait_port(3128)
         wait_port(3228)
         wait_port(9443)
@@ -238,7 +252,7 @@ def main():
                         received += sock.recv(len(payload)-len(received))
                     assert received == payload
             return len(payload)*12
-        with ThreadPoolExecutor(max_workers=48) as pool:
+        with ThreadPoolExecutor(max_workers=min(48, transit_capacity)) as pool:
             count = sum(pool.map(stream, range(96)))
         print('CONNECT: 96 authenticated TLS tunnels, verified payload bytes', count, flush=True)
         # A graceful reload must not break a neighboring active tunnel.
@@ -256,10 +270,11 @@ def main():
         print('Telegram TLS relays: survived idle seconds', opts.idle_seconds, flush=True)
         # Validate the real mtg config and its connection admission independently.
         secret = 'ee'+'11'*16+'6578616d706c652e636f6d'
-        mtvalues = dict(common, mtproxy_secret_resolved=secret, mtproxy_max_connections=100, mtproxy_local_port=2084)
+        mtvalues = dict(common, mtproxy_secret_resolved=secret, mtproxy_max_connections=100,
+                        mtproxy_effective_max_connections=concurrency, mtproxy_local_port=2084)
         (work/'mtg.toml').write_text(render('roles/mtproxy/templates/mtg.toml.j2', mtvalues))
-        launch('mtg', [mtg, 'run', work/'mtg.toml'], 32,
-               dict(os.environ, GOMEMLIMIT='20MiB'))
+        launch('mtg', [mtg, 'run', work/'mtg.toml'], limits['mtg'],
+               dict(os.environ, GOMEMLIMIT=f"{int(limits['mtg']*.65)}MiB"))
         wait_port(2084)
         sockets = [socket.create_connection(('127.0.0.1',2084), timeout=2) for _ in range(160)]
         time.sleep(2)
@@ -267,7 +282,7 @@ def main():
             sock.close()
         time.sleep(11)
         wait_port(2084)
-        print('mtg: real binary accepts again after 160 incomplete handshakes (concurrency=100)', flush=True)
+        print('mtg: accepts again after 160 incomplete handshakes, concurrency', concurrency, flush=True)
         bouncer_config = yaml.safe_load((cache/'crowdsec-test/bouncer.yaml').read_text())
         request = urllib.request.Request('http://127.0.0.1:18080/v1/decisions',
                                         headers={'X-Api-Key':bouncer_config['api_key']})
