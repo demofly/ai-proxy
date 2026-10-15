@@ -198,6 +198,13 @@
     insertbefore: '^\s*events\s*\{'
   notify: Reload nginx
 
+- name: Deploy ai-proxy transit capacity zone
+  ansible.builtin.template:
+    src: '{{ playbook_dir }}/templates/10-aiproxy-capacity.conf.j2'
+    dest: /etc/nginx/stream.d/10-aiproxy-capacity.conf
+    mode: '0644'
+  notify: Reload nginx
+
 - name: Deploy shared SNI router
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/00-sni-router.conf.j2"
@@ -278,34 +285,14 @@
       failed_when: false
       changed_when: false
 
-    - name: Restart squid to release port 443
+    - name: Stop squid to release port 443 (main play initializes and starts it)
       ansible.builtin.systemd:
         name: squid
-        state: restarted
+        state: stopped
       when: _squid_on_443.rc == 0
 
-    # Перечитать конфигурацию можно только у работающего процесса: `squid -k
-    # reconfigure` посылает сигнал по pid-файлу и при остановленной службе
-    # завершается с ошибкой. Осмотр нужен потому, что Squid здесь бывает
-    # остановлен — задачей первой установки в playbook.yml.
-    - name: Check whether squid is running
-      ansible.builtin.command: systemctl is-active squid
-      register: _squid_active
-      changed_when: false
-      failed_when: false
-
-    # Reload Squid при изменении конфига (cache_peer, ACL, headers и т.д.)
-    # без необходимости полного restart (порт не менялся).
-    # Остановленный Squid здесь не поднимается намеренно: его запуском ведает
-    # фаза конфигурации Squid в playbook.yml, и делает она это после того, как
-    # порт 443 освобождён и занят nginx.
-    - name: Reconfigure squid after config change
-      ansible.builtin.command: squid -k reconfigure
-      when:
-        - _squid_config_deployed.changed | default(false)
-        - _squid_on_443.rc != 0
-        - _squid_active.stdout | default('') == 'active'
-
+    # Main playbook applies Squid changes after startup-only parameters and
+    # cache trees have been checked. Do not reload workers/cache layout here.
     - name: Enable and start nginx
       ansible.builtin.systemd:
         name: nginx

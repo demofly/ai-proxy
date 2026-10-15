@@ -3,6 +3,14 @@ import math
 import re
 
 
+def squid_duration_seconds(value):
+    """Parse the time units accepted by our inventory/Squid timeout settings."""
+    match = re.fullmatch(r'\s*(\d+)\s*(seconds?|minutes?|hours?|days?|weeks?)\s*', str(value))
+    if not match:
+        raise ValueError('Timeout must be an integer followed by seconds/minutes/hours/days/weeks')
+    return int(match[1]) * {'s': 1, 'm': 60, 'h': 3600, 'd': 86400, 'w': 604800}[match[2][0]]
+
+
 def as_bool(value):
     return str(value).lower() in ("true", "yes", "1", "on")
 
@@ -104,6 +112,7 @@ def postgres_resource_plan(memory, users, pool_max=None, pool_min=2):
 
 class FilterModule:
     def filters(self):
-        return {"service_memory": service_memory, "postgres_cluster": postgres_cluster,
+        return {"squid_duration_seconds": squid_duration_seconds,
+                "service_memory": service_memory, "postgres_cluster": postgres_cluster,
                 "matrix_memory_plan": matrix_memory_plan,
                 "postgres_resource_plan": postgres_resource_plan}

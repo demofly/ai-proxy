@@ -54,41 +54,48 @@
     # проекты. Остаток нужен ядру, страничному кешу, sshd и журналу: без него
     # узел уходит в отказ раньше, чем сработает предел любой отдельной службы.
     #
-    # Service limits are starting safety budgets, not proven 2x peaks.
-    # Shares are fractions of the validated allocation; minima never expand it.
-    mem_reserve_share: 0.25            # ядру, страничному кешу, системным службам
-                                       # (действует при ОДИНОЧНОМ размещении)
-
-    # Shared-host allocation is capped and reduced by real foreign service limits.
-    mem_share_when_shared: 0.35
-
-    mem_system_min_mb: 128
-    mem_reserve_when_shared_share: 0.15
-    mem_foreign_reserved_mb: 0         # explicit reserve; measured foreign limits still count
-
-    mem_share_squid: 0.16
-    mem_share_unbound: 0.06
-    mem_share_nginx: 0.04
-    mem_share_mtproxy: 0.06
-    mem_share_keepalived: 0.02
-    mem_share_crowdsec: 0.26
-    mem_share_crowdsec_bouncer: 0.04
-
-    # Starting floors include process/cache overhead and shared nginx reloads.
-    # Validate actual peaks under both projects' load before changing them.
-    mem_min_squid: 96
-    mem_min_unbound: 32
-    mem_min_nginx: 96
-    mem_min_mtproxy: 32
-    mem_min_keepalived: 12
-    mem_min_crowdsec: 192
-    mem_min_crowdsec_bouncer: 32
+    # OS/foreign reserves remain separate from the hard project cap.
+    # Complete upstream profile = 380 MiB (398458880 bytes, below 400 MB).
+    # Inventory proxy_memory_limits overrides individual caps; the sum is checked.
+    _proxy_default_memory_limits:
+      squid: 64
+      unbound: 24
+      nginx: 48
+      mtg: 32
+      keepalived: 12
+      crowdsec: 172
+      crowdsec_bouncer: 24
+      haveged: 8
+      health: 8
 
   pre_tasks:
     - name: Refresh hardware facts before resource planning
       tags: [always]
       ansible.builtin.setup:
         gather_subset: ['!all', '!min', hardware]
+
+    - name: Resolve inventory resource defaults without masking inventory values
+      tags: [always]
+      ansible.builtin.set_fact:
+        mem_reserve_share: '{{ mem_reserve_share | default(0.25) }}'
+        # The explicit 400 MB project cap plus measured foreign limits replaces
+        # the old arbitrary 35% split. An operator can still request a lower share.
+        mem_share_when_shared: '{{ mem_share_when_shared | default(1.0) }}'
+        mem_system_min_mb: '{{ mem_system_min_mb | default(128) }}'
+        mem_reserve_when_shared_share: '{{ mem_reserve_when_shared_share | default(0.15) }}'
+        mem_foreign_reserved_mb: '{{ mem_foreign_reserved_mb | default(0) }}'
+
+    - name: Check cgroup v2 support before changing services
+      tags: [always]
+      ansible.builtin.slurp:
+        src: /sys/fs/cgroup/cgroup.controllers
+      register: _proxy_cgroup_controllers
+
+    - name: Require the memory controller for the complete hard budget
+      tags: [always]
+      ansible.builtin.assert:
+        that: "'memory' in (_proxy_cgroup_controllers.content | b64decode).split()"
+        fail_msg: 'This deployment requires systemd with cgroup v2 memory control for its RAM/swap guarantees.'
 
     - name: Calculate resource limits
       tags: [always]
@@ -185,6 +192,9 @@
           - mem_share_when_shared | float > 0 and mem_share_when_shared | float <= 1
           - mem_foreign_reserved_mb | int >= 0
           - mem_system_min_mb | int >= 128
+          - proxy_memory_budget_mb | default(380) | int > 0
+          - proxy_memory_budget_mb | default(380) | int <= 381
+        fail_msg: 'Invalid resource reserves or project cap. proxy_memory_budget_mb is in MiB and must be 1..381 to stay below 400000000 bytes (default 380).'
 
     - name: Collect current service memory limits
       tags: [always]
@@ -199,7 +209,7 @@
       ansible.builtin.set_fact:
         _proxy_foreign_memory: >-
           {{ _proxy_service_memory.stdout | service_memory(
-             ['squid.service', 'unbound.service', 'nginx.service']
+             ['squid.service', 'unbound.service', 'nginx.service', 'haveged.service', 'aiproxy-health.service']
              + (['mtg.service'] if (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool) else [])
              + (['keepalived.service'] if (proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined) else [])
              + (['crowdsec.service', 'crowdsec-firewall-bouncer.service'] if crowdsec_enabled | default(false) | bool else [])) }}
@@ -223,50 +233,65 @@
       tags: [always]
       ansible.builtin.set_fact:
         mem_allocatable_mb: >-
-          {{ [(ansible_memtotal_mb | int * mem_share_when_shared | float) | int,
+          {{ [proxy_memory_budget_mb | default(380) | int,
+              (ansible_memtotal_mb | int * mem_share_when_shared | float) | int,
                ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int] | min
-             if shared_host | bool else ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int }}
+             if shared_host | bool else [proxy_memory_budget_mb | default(380) | int,
+               ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int] | min }}
 
     - name: Calculate per-service memory limits
       tags: [always]
       ansible.builtin.set_fact:
-        mem_squid_mb: "{{ [(mem_allocatable_mb | int * mem_share_squid | float) | int, mem_min_squid | int] | max }}"
-        mem_unbound_mb: "{{ [(mem_allocatable_mb | int * mem_share_unbound | float) | int, mem_min_unbound | int] | max }}"
-        mem_nginx_mb: "{{ [(mem_allocatable_mb | int * mem_share_nginx | float) | int, mem_min_nginx | int] | max }}"
-        mem_mtproxy_mb: "{{ [(mem_allocatable_mb | int * mem_share_mtproxy | float) | int, mem_min_mtproxy | int] | max }}"
-        mem_keepalived_mb: "{{ [(mem_allocatable_mb | int * mem_share_keepalived | float) | int, mem_min_keepalived | int] | max }}"
-        mem_crowdsec_mb: "{{ crowdsec_memory_mb | default([(mem_allocatable_mb | int * mem_share_crowdsec | float) | int, mem_min_crowdsec | int] | max) }}"
-        mem_crowdsec_bouncer_mb: "{{ crowdsec_fw_bouncer_memory_mb | default([(mem_allocatable_mb | int * mem_share_crowdsec_bouncer | float) | int, mem_min_crowdsec_bouncer | int] | max) }}"
+        mem_squid_mb: "{{ proxy_memory_limits.squid | default(_proxy_default_memory_limits.squid) }}"
+        mem_unbound_mb: "{{ proxy_memory_limits.unbound | default(_proxy_default_memory_limits.unbound) }}"
+        mem_nginx_mb: "{{ proxy_memory_limits.nginx | default(_proxy_default_memory_limits.nginx) }}"
+        mem_mtproxy_mb: "{{ proxy_memory_limits.mtg | default(_proxy_default_memory_limits.mtg) }}"
+        mem_keepalived_mb: "{{ proxy_memory_limits.keepalived | default(_proxy_default_memory_limits.keepalived) }}"
+        mem_crowdsec_mb: "{{ crowdsec_memory_mb | default(proxy_memory_limits.crowdsec | default(_proxy_default_memory_limits.crowdsec)) }}"
+        mem_crowdsec_bouncer_mb: "{{ crowdsec_fw_bouncer_memory_mb | default(proxy_memory_limits.crowdsec_bouncer | default(_proxy_default_memory_limits.crowdsec_bouncer)) }}"
+        mem_haveged_mb: "{{ proxy_memory_limits.haveged | default(_proxy_default_memory_limits.haveged) }}"
+        mem_health_mb: "{{ proxy_memory_limits.health | default(_proxy_default_memory_limits.health) }}"
 
     # Планируемая сумма — только те службы, что действительно разворачиваются
     # на этом узле: набор различается для access и upstream
     - name: Bound workers by the service memory budget
       tags: [always]
       ansible.builtin.set_fact:
-        squid_workers: "{{ [cpu_cores | int, [mem_squid_mb | int // 96, 1] | max] | min }}"
-        nginx_worker_connections: "{{ nginx_worker_connections | default([mem_nginx_mb | int // 96 * 512, 256] | max) }}"
-        proxy_nginx_workers: "{{ [cpu_cores | int, [mem_nginx_mb | int // 96, 1] | max] | min }}"
+        squid_workers: "{{ [cpu_cores | int, [mem_squid_mb | int // 64, 1] | max] | min }}"
+        nginx_worker_connections: "{{ nginx_worker_connections | default(512) }}"
+        proxy_nginx_workers: "{{ [cpu_cores | int, [mem_nginx_mb | int // 48, 1] | max] | min }}"
 
     - name: Validate worker counts and nginx connections against memory
       tags: [always]
       ansible.builtin.assert:
         that:
-          - mem_squid_mb | int >= 96
-          - mem_unbound_mb | int >= 32
-          - mem_nginx_mb | int >= 96
-          - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_mb | int >= 192
-          - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_bouncer_mb | int >= 32
+          - mem_squid_mb | int >= 64
+          - mem_unbound_mb | int >= 24
+          - mem_nginx_mb | int >= 48
+          - mem_mtproxy_mb | int >= 32
+          - mem_haveged_mb | int >= 8
+          - mem_health_mb | int >= 8
+          - mem_keepalived_mb | int >= 12
+          - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_mb | int >= 128
+          - not (crowdsec_enabled | default(false) | bool) or mem_crowdsec_bouncer_mb | int >= 24
           - squid_workers | int >= 1
-          - squid_workers | int * 96 <= mem_squid_mb | int
-          - proxy_nginx_workers | int * 96 <= mem_nginx_mb | int
-          - nginx_worker_connections | int <= [mem_nginx_mb | int // 96 * 512, 256] | max
-        fail_msg: "Worker/connection overrides exceed the service memory budget. Increase its budget or reduce the override."
+          - squid_workers | int * 64 <= mem_squid_mb | int
+          - proxy_nginx_workers | int * 48 <= mem_nginx_mb | int
+          - nginx_worker_connections | int <= mem_nginx_mb | int // 48 * 512
+          - proxy_max_connections | default(96) | int >= 1
+          - proxy_max_connections | default(96) | int * 4 + 128 <= nginx_worker_connections | int * proxy_nginx_workers | int
+          - mtproxy_max_connections | default(64) | int >= 1
+          - mtproxy_max_connections | default(64) | int <= (mem_mtproxy_mb | int - 16) * 8
+          - mtproxy_max_connections | default(64) | int * 4 + 256 <= 4096
+          - read_timeout | default('1 hour') | squid_duration_seconds > 0
+          - client_lifetime | default('1 day') | squid_duration_seconds > read_timeout | default('1 hour') | squid_duration_seconds
+        fail_msg: 'Invalid service/worker/connection budget or timeout policy. Check proxy_memory_limits, proxy_max_connections, mtproxy_max_connections and read_timeout < client_lifetime.'
 
     - name: Sum planned memory limits for services deployed on this host
       tags: [always]
       ansible.builtin.set_fact:
         mem_planned_mb: >-
-          {{ mem_squid_mb | int + mem_unbound_mb | int
+          {{ mem_squid_mb | int + mem_unbound_mb | int + mem_haveged_mb | int + mem_health_mb | int
              + (mem_nginx_mb | int if (_proxy_nginx_needed | bool) else 0)
              + (mem_mtproxy_mb | int if (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool) else 0)
              + (mem_keepalived_mb | int if (proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined) else 0)
@@ -300,7 +325,7 @@
           (RAM {{ ansible_memtotal_mb }} МБ, резерв ядра {{ (mem_reserve_share | float * 100) | int }}%,
           отдано соседним проектам {{ mem_foreign_effective_mb }} МБ).
           Варианты: увеличить RAM узла; отключить необязательные службы
-          (crowdsec_enabled, mtproxy_enabled); понизить доли mem_share_* в переменных.
+          (crowdsec_enabled, mtproxy_enabled); согласовать proxy_memory_limits с общим бюджетом.
         success_msg: >-
           План памяти помещается: {{ mem_planned_mb }} из {{ mem_allocatable_mb }} МБ
           выделяемых (RAM {{ ansible_memtotal_mb }} МБ) — Squid {{ mem_squid_mb }},
@@ -371,6 +396,7 @@
           - psmisc
           - bsdutils
           - squidclient
+          - curl
         state: "{{ pkg_state }}"
       when: ansible_os_family == 'Debian'
 
@@ -381,6 +407,7 @@
           - haveged
           - psmisc
           - util-linux
+          - curl
         state: "{{ pkg_state }}"
       when: ansible_os_family == 'RedHat'
 
@@ -674,6 +701,7 @@
           # рассчитаны от него же.
           MemoryHigh=infinity
           MemoryMax={{ mem_squid_mb }}M
+          TimeoutStopSec=30s
         owner: root
         group: root
         mode: '0644'
@@ -822,20 +850,6 @@
     # Phase: Squid configuration
     # ===========================================================================
 
-    # Сохраняем критические параметры текущего конфига перед изменением
-    # Эти параметры требуют restart при изменении (reload недостаточен)
-    - name: Get current critical Squid parameters
-      ansible.builtin.shell: |
-        set -o pipefail
-        HTTP_PORT=$(grep -E '^http_port\s+' {{ squid_config_path }} 2>/dev/null | head -1 | sed 's/^http_port\s*//' || echo 'none')
-        CACHE_DIR=$(grep -E '^cache_dir\s+' {{ squid_config_path }} 2>/dev/null | head -1 | awk '{print $2":"$3":"$4":"$5}' || echo 'none')
-        echo "${HTTP_PORT}|${CACHE_DIR}"
-      args:
-        executable: /bin/bash
-      register: squid_params_before
-      changed_when: false
-      failed_when: false
-
     # =======================================================================
     # Раздача материала участка узлам
     # =======================================================================
@@ -946,70 +960,8 @@
         mode: '0755'
       when: not (enable_logging | default(true) | bool)
 
-    # Получаем новые критические параметры после деплоя
-    - name: Get new critical Squid parameters
-      ansible.builtin.shell: |
-        set -o pipefail
-        HTTP_PORT=$(grep -E '^http_port\s+' {{ squid_config_path }} | head -1 | sed 's/^http_port\s*//')
-        CACHE_DIR=$(grep -E '^cache_dir\s+' {{ squid_config_path }} 2>/dev/null | head -1 | awk '{print $2":"$3":"$4":"$5}' || echo 'none')
-        echo "${HTTP_PORT}|${CACHE_DIR}"
-      args:
-        executable: /bin/bash
-      register: squid_params_after
-      changed_when: false
-      when: squid_config_access.changed | default(false) or squid_config_upstream.changed | default(false)
-
-    # Определяем: требуется restart или достаточно reload
-    # Restart нужен при изменении: http_port, cache_dir
-    - name: Determine if Squid restart is required
-      ansible.builtin.set_fact:
-        squid_restart_required: "{{ squid_params_before.stdout | default('') != squid_params_after.stdout | default('') }}"
-      when: squid_config_access.changed | default(false) or squid_config_upstream.changed | default(false)
-
-    # Проверяем, запущен ли Squid.
-    # Осмотр выполняется всегда, а не только при изменившейся конфигурации:
-    # состояние службы от конфигурации не зависит — Squid может быть остановлен
-    # первой установкой, обновлением пакета или оператором. Команда ничего не
-    # меняет, поэтому безусловный запуск ничего не стоит.
-    - name: Check if Squid is running
-      ansible.builtin.command: systemctl is-active squid
-      register: squid_status
-      changed_when: false
-      failed_when: false
-
-    # Reload Squid - для изменений ACL, headers, auth, timeouts и т.д. (non-critical config changes)
-    - name: Reload Squid
-      ansible.builtin.systemd:
-        name: squid
-        state: reloaded
-      when: >
-        (squid_config_access.changed | default(false) or squid_config_upstream.changed | default(false))
-        and not (squid_restart_required | default(false))
-        and (squid_status.stdout | default('') == 'active')
-
-    # Start Squid если он не был запущен.
-    # Условие расцеплено с изменением конфигурации: остановленную службу надо
-    # поднимать независимо от того, менялся ли конфигурационный файл. Прежняя
-    # редакция оставляла Squid лежать до задачи «Enable and start Squid», то
-    # есть до конца фазы файрвола, — при переходе на обновления это стало бы
-    # штатным простоем на каждой новой версии пакета.
-    - name: Start Squid (if not running)
-      ansible.builtin.systemd:
-        name: squid
-        state: started
-      when: squid_status.stdout | default('') != 'active'
-
-    # Restart Squid - при изменении http_port или cache_dir
-    - name: Restart Squid (critical config changes - port or cache_dir)
-      ansible.builtin.systemd:
-        name: squid
-        state: restarted
-      when: >
-        (squid_config_access.changed | default(false) or squid_config_upstream.changed | default(false))
-        and (squid_restart_required | default(false))
-
-    # Примечание: reload/restart Squid выполняется inline выше
-    # (не через handlers, т.к. требуется логика выбора reload vs restart)
+    - name: Apply Squid configuration with startup parameter tracking
+      ansible.builtin.include_tasks: tasks/squid-apply.yml
 
     # =======================================================================
     # Ротация журналов Squid
@@ -1051,17 +1003,6 @@
         path: /etc/logrotate.d/squid-aiproxy
         state: absent
       when: not (enable_logging | default(true) | bool)
-
-    # Инициализация кеша. Условие — включённое кеширование, а не роль узла:
-    # шаблон upstream выпускает cache_dir по тому же признаку, и привязка задачи
-    # к роли оставила бы upstream с объявленным, но неинициализированным кешем.
-    # При многопроцессном режиме структура создаётся под каждый процесс, поэтому
-    # признаком выполненной работы служит каталог первого из них.
-    - name: Initialize Squid cache
-      ansible.builtin.command: squid -z
-      args:
-        creates: "{{ '/var/spool/squid/1/00' if (squid_workers | int > 1) else '/var/spool/squid/00' }}"
-      when: enable_caching | default(false) | bool
 
     # ===========================================================================
     # Phase: Firewall (upstream only)
@@ -1413,6 +1354,9 @@
         enabled: true
         state: started
 
+    - name: Deploy local service health monitoring
+      ansible.builtin.include_tasks: tasks/health.yml
+
     # ===========================================================================
     # Phase: Keepalived (access proxies only, VRRP failover)
     # ===========================================================================
@@ -1491,6 +1435,12 @@
       register: _shared_ports_applied
       changed_when: "'CHANGED' in _shared_ports_applied.stdout"
       when: not ansible_check_mode
+
+    - name: Apply pending configuration handlers before resource migration
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enforce the complete project resource budget
+      ansible.builtin.include_tasks: tasks/resource-limits.yml
 
   handlers:
     # Примечание: Squid restart выполняется inline в tasks

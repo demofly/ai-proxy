@@ -1,0 +1,4 @@
+# {{ ansible_managed }}
+# Only our loopback transit servers apply this zone. Matrix/foreign servers
+# and their clients are not counted and are not subject to this limit.
+limit_conn_zone $server_addr zone=aiproxy_transit:32k;

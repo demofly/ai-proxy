@@ -65,7 +65,9 @@ table inet filter {
 
         # Allow ICMP ping
         icmp type echo-request accept
-        icmpv6 type echo-request accept
+        icmpv6 type { echo-request, destination-unreachable, packet-too-big, time-exceeded, parameter-problem } accept
+        # IPv6 neighbor discovery must survive neighbor-cache expiry.
+        ip6 hoplimit 255 icmpv6 type { nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
 
         # Log dropped packets (optional, uncomment if needed)
         # log prefix "nftables dropped: " flags all counter

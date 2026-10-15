@@ -138,6 +138,13 @@
 # Маршрутизатор SNI принадлежит ai-proxy как владельцу nginx на узле и
 # разворачивается безусловно: его редакция — единственная действующая.
 # Расширяют его соседи не правкой файла, а своими фрагментами в sni-map.d.
+- name: Deploy ai-proxy transit capacity zone (upstream)
+  ansible.builtin.template:
+    src: '{{ playbook_dir }}/templates/10-aiproxy-capacity.conf.j2'
+    dest: /etc/nginx/stream.d/10-aiproxy-capacity.conf
+    mode: '0644'
+  notify: Reload nginx for mtproxy
+
 - name: Deploy shared SNI router (upstream)
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/00-sni-router.conf.j2"
@@ -211,12 +218,6 @@
 - name: "Migration: remove Squid TLS terminator (Squid is now the default backend)"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/10-squid-tls-term.conf
-    state: absent
-  notify: Reload nginx for mtproxy
-
-- name: "Migration: remove Squid SNI map entry"
-  ansible.builtin.file:
-    path: /etc/nginx/stream.d/sni-map.d/squid.conf
     state: absent
   notify: Reload nginx for mtproxy
 

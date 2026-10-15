@@ -9,11 +9,12 @@ global_defs {
 }
 
 # Проверка доступности Squid с автоперезапуском
-# Скрипт: killall -0 squid (проверка) → systemctl restart squid (при падении)
+# Проверка локального HTTP manager, три отказа → асинхронный restart.
 # Cooldown {{ keepalived_restart_cooldown | default(30) }}s между попытками рестарта
 vrrp_script check_squid {
-    script "/etc/keepalived/check_and_restart_squid.sh"
+    script "/usr/local/sbin/aiproxy-check-squid"
     interval 2
+    timeout 3
     weight -20
     fall 3
     rise 2

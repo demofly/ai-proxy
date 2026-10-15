@@ -5,7 +5,9 @@
 secret = "{{ mtproxy_secret_resolved }}"
 bind-to = "127.0.0.1:{{ mtproxy_local_port }}"
 
-{% if mtproxy_fake_tls_domain is defined and mtproxy_fake_tls_domain != "" %}
-# Fake-TLS для обхода DPI (маскировка под TLS к популярному домену)
-fake-tls = "{{ mtproxy_fake_tls_domain }}"
-{% endif %}
+# Fake-TLS hostname is encoded in the secret; mtg v2 has no fake-tls key.
+# Bound accepted sessions before the daemon can exhaust its FD/RAM budget.
+concurrency = {{ mtproxy_max_connections | default(64) | int }}
+[network]
+[network.timeout]
+idle = "5m"

@@ -1,0 +1,102 @@
+---
+# Run after application configuration has been validated/applied. Existing PIDs
+# enter Slice on their next normal restart. Until then, the sum of their live
+# MemoryMax caps enforces the same total without disconnecting shared nginx.
+- name: Assemble the complete managed service budget
+  ansible.builtin.set_fact:
+    _proxy_resource_units: >-
+      {{ [{'name': 'squid.service', 'memory_mb': mem_squid_mb},
+          {'name': 'unbound.service', 'memory_mb': mem_unbound_mb},
+          {'name': 'haveged.service', 'memory_mb': mem_haveged_mb},
+          {'name': 'aiproxy-health.service', 'memory_mb': mem_health_mb}]
+          + ([{'name': 'nginx.service', 'memory_mb': mem_nginx_mb}] if _proxy_nginx_needed | bool else [])
+          + ([{'name': 'mtg.service', 'memory_mb': mem_mtproxy_mb}] if proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool else [])
+          + ([{'name': 'keepalived.service', 'memory_mb': mem_keepalived_mb}] if proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined else [])
+          + ([{'name': 'crowdsec.service', 'memory_mb': mem_crowdsec_mb},
+              {'name': 'crowdsec-firewall-bouncer.service', 'memory_mb': mem_crowdsec_bouncer_mb}] if crowdsec_enabled | default(false) | bool else []) }}
+
+- name: Validate the enforced service list against the preflight plan
+  ansible.builtin.assert:
+    that:
+      - _proxy_resource_units | map(attribute='memory_mb') | map('int') | sum == mem_planned_mb | int
+      - mem_planned_mb | int <= proxy_memory_budget_mb | default(380) | int
+
+- name: Deploy the aggregate project memory limit
+  ansible.builtin.template:
+    src: '{{ playbook_dir }}/templates/aiproxy.slice.j2'
+    dest: /etc/systemd/system/aiproxy.slice
+    mode: '0644'
+
+- name: Create managed service resource override directories
+  ansible.builtin.file:
+    path: '/etc/systemd/system/{{ item.name }}.d'
+    state: directory
+    mode: '0755'
+  loop: '{{ _proxy_resource_units }}'
+  loop_control:
+    label: '{{ item.name }}'
+
+- name: Enforce complete service limits and recovery after OOM
+  ansible.builtin.copy:
+    dest: '/etc/systemd/system/{{ item.name }}.d/zz-aiproxy-resources.conf'
+    mode: '0644'
+    content: |
+      # Managed by ai-proxy. The complete shared nginx is included in this budget.
+      [Unit]
+      StartLimitIntervalSec=0
+      [Service]
+      Slice=aiproxy.slice
+      MemoryAccounting=yes
+      MemoryHigh=infinity
+      MemoryMax={{ item.memory_mb | int }}M
+      MemorySwapMax=0
+      OOMPolicy=kill
+      TimeoutStopSec=30s
+      {% if item.name != 'aiproxy-health.service' %}
+      Restart=on-failure
+      RestartSec=5s
+      {% endif %}
+  loop: '{{ _proxy_resource_units }}'
+  loop_control:
+    label: '{{ item.name }}'
+
+- name: Load the aggregate and individual resource limits
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Read actual cgroup placement
+  ansible.builtin.command:
+    argv: [systemctl, show, '{{ item.name }}', --property=ControlGroup, --value]
+  register: _proxy_cgroups
+  changed_when: false
+  loop: '{{ _proxy_resource_units }}'
+  loop_control:
+    label: '{{ item.name }}'
+  when: not ansible_check_mode
+
+- name: Verify configured service caps and slice
+  ansible.builtin.command:
+    argv: [systemctl, show, '{{ item.name }}', --property=ControlGroup, --property=MemoryMax, --property=Slice]
+  register: _proxy_effective_limits
+  changed_when: false
+  failed_when: >-
+    ('MemoryMax=' ~ ((item.memory_mb | int * 1048576) | string)) not in _proxy_effective_limits.stdout
+    or 'Slice=aiproxy.slice' not in _proxy_effective_limits.stdout
+  loop: '{{ _proxy_resource_units }}'
+  loop_control:
+    label: '{{ item.name }}'
+  when: not ansible_check_mode
+
+- name: Read live cgroup v2 memory caps (including services pending slice migration)
+  ansible.builtin.slurp:
+    src: '/sys/fs/cgroup{{ item.stdout }}/memory.max'
+  register: _proxy_live_cap
+  failed_when: >-
+    _proxy_live_cap.failed | default(false)
+    or (_proxy_live_cap.content | b64decode | trim | int) != item.item.memory_mb | int * 1048576
+  loop: '{{ _proxy_cgroups.results | default([]) }}'
+  loop_control:
+    label: '{{ item.item.name }}'
+  when:
+    - not ansible_check_mode
+    - item.stdout | default('') | length > 0

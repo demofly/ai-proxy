@@ -10,7 +10,7 @@ negative_ttl 0 seconds
 
 {% if enable_caching %}
 # Кеширование (для HTTP запросов)
-{% if cpu_cores | int > 1 %}
+{% if squid_workers | int > 1 %}
 cache_dir ufs /var/spool/squid/${process_number} 100 16 256
 {% else %}
 cache_dir ufs /var/spool/squid 100 16 256
@@ -37,9 +37,15 @@ acl access_proxy src {{ hostvars[host]['ansible_host'] }}
 {% endfor %}
 
 {% if nginx_on_443 | default(false) %}
+{% if squid_transit_tls | default(false) | bool %}
+# TLS terminator deliberately replaces the peer with loopback for anonymity.
+# Only this local PROXY listener is trusted; the public firewall still admits
+# exclusively access-node IPs. Do not propagate the end-user IP here.
+acl access_proxy src 127.0.0.1/32
+{% endif %}
 # За nginx SNI router: слушаем на localhost с PROXY protocol
-# nginx:443 делает SNI routing и передаёт реальный IP через PROXY protocol
-http_port 127.0.0.1:{{ squid_local_port | default(3128) }} require-proxy-header
+# The local TLS relay sends an anonymized PROXY header.
+http_port 127.0.0.1:{{ squid_local_port | default(3128) }} require-proxy-header tcpkeepalive=60,10,30
 acl localhost_pp src 127.0.0.1
 proxy_protocol_access allow localhost_pp
 proxy_protocol_access deny all
@@ -50,9 +56,9 @@ proxy_protocol_access deny all
 # целевого сервиса — недоступен наблюдателю между узлами; прежде он шёл
 # открытым текстом, и адресат обращения был виден, хотя содержимое защищено
 # сквозным шифрованием клиента с сервисом.
-https_port {{ squid_port }} tls-cert=/etc/squid/transit.crt tls-key=/etc/squid/transit.key
+https_port {{ squid_port }} tls-cert=/etc/squid/transit.crt tls-key=/etc/squid/transit.key tcpkeepalive=60,10,30
 {% else %}
-http_port {{ squid_port }}
+http_port {{ squid_port }} tcpkeepalive=60,10,30
 {% endif %}
 {% endif %}
 
@@ -94,13 +100,10 @@ request_header_replace User-Agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) App
 reply_header_access Via deny all
 reply_header_access X-Cache deny all
 
-# Размеры памяти — доля предела cgroup для службы ({{ mem_squid_mb | default(64) }} MB).
-# Upstream не кеширует объекты, поэтому cache_mem не задаётся, а пулы
-# внутренних структур ограничены половиной предела.
-{% set squid_limit_mb = mem_squid_mb | default(64) | int %}
-{% set pools_mb = (squid_limit_mb * 0.5) | int %}
-# Пулы внутренних структур: {{ pools_mb }} MB (50% предела)
-memory_pools_limit {{ pools_mb }} MB
+# Only retained UNUSED allocations are bounded by memory_pools_limit.
+# Neither it nor cache_mem bounds live tunnel/socket memory: systemd does.
+memory_pools_limit 4 MB
+cache_mem {{ 4 if enable_caching else 0 }} MB
 
 # Таймауты
 connect_timeout 15 seconds
@@ -123,20 +126,17 @@ request_timeout 30 seconds
 shutdown_lifetime 3 seconds
 
 # SMP - использование всех ядер CPU
-{% set cpu_cores = ansible_processor_vcpus | default(1) %}
-{% if cpu_cores > 1 %}
 # Предел числа дескрипторов наблюдаем в конфигурации, а не только в окружении.
 max_filedescriptors {{ fd_limit | default(65535) }}
 
 workers {{ squid_workers }}
-{% endif %}
 
 # Persistent connections - переиспользование соединений
 client_persistent_connections on
 server_persistent_connections on
 
 # Pipelining - параллельная обработка запросов
-pipeline_prefetch 10
+pipeline_prefetch 0
 
 # Quick abort - быстрое освобождение ресурсов при отмене
 quick_abort_min 0 KB

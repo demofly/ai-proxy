@@ -1,0 +1,43 @@
+---
+- name: Deploy a bounded local Squid application health check
+  ansible.builtin.template:
+    src: '{{ playbook_dir }}/templates/aiproxy-health.sh.j2'
+    dest: /usr/local/sbin/aiproxy-check-squid
+    mode: '0755'
+
+- name: Deploy Squid health service and timer
+  ansible.builtin.copy:
+    dest: '/etc/systemd/system/{{ item.name }}'
+    mode: '0644'
+    content: '{{ item.content }}'
+  loop:
+    - name: aiproxy-health.service
+      content: |
+        [Unit]
+        Description=Check local Squid readiness and recover stalled service
+        After=squid.service
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/aiproxy-check-squid
+        TimeoutStartSec=10s
+        Slice=aiproxy.slice
+        MemoryMax={{ mem_health_mb }}M
+        MemorySwapMax=0
+    - name: aiproxy-health.timer
+      content: |
+        [Unit]
+        Description=Periodic local Squid readiness check
+        [Timer]
+        OnBootSec=90s
+        OnUnitInactiveSec=30s
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: '{{ item.name }}'
+
+- name: Enable periodic local health monitoring
+  ansible.builtin.systemd:
+    name: aiproxy-health.timer
+    daemon_reload: true
+    enabled: true
+    state: started

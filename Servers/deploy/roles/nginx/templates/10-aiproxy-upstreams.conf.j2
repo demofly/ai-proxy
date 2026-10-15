@@ -19,17 +19,19 @@ server {
     listen 127.0.0.1:{{ mtproxy_relay_port | default(9443) }} proxy_protocol;
 
     proxy_pass aiproxy_mtproxy_backends;
+    limit_conn aiproxy_transit {{ proxy_max_connections | default(96) | int }};
 
     # TLS 1.3 to upstream nginx SNI router
     proxy_ssl on;
     proxy_ssl_protocols TLSv1.3;
     proxy_ssl_server_name on;
-    proxy_ssl_name {{ mtproxy_hostname | default(mtproxy_fake_tls_domain) | default('') }};
+    proxy_ssl_name {{ mtproxy_hostname | default(mtproxy_fake_tls_domain, true) }};
     proxy_ssl_verify off;  # self-signed certs on upstream nodes
 
-    # Timeouts: 60s idle for MTProxy (Telegram has its own keepalive)
+    # Exceed mtg's 300s idle timeout; 60s races mobile Telegram keepalives.
     proxy_connect_timeout 10s;
-    proxy_timeout 60s;
+    proxy_timeout 360s;
+    proxy_buffer_size 4k;
 
     # TCP keepalive: detect dead peers via kernel probes
     proxy_socket_keepalive on;

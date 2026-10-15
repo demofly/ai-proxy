@@ -1,0 +1,108 @@
+# Аудит устойчивости соединений и RAM — 2026-10-15
+
+Основания: C1-BC-004 (BG-01, BG-03), C2-CN-001 (два уровня), C2-CN-002
+(соседи и graceful reload), C2-NF-002 (анонимность и IPS), C2-FR-006 (Telegram).
+Анонимизация IP сохранена; сквозной TLS внутри CONNECT не расшифровывается.
+Аутентификация/аудит остаются на access, upstream Squid не ведёт журнал.
+CrowdSec не отключается для получения малого числа в отчёте о памяти.
+
+## Исправленные дефекты
+
+| Причина | Следствие | Исправление |
+|---|---|---|
+| `mtproxy_max_connections` не попадал в TOML | Реальный default mtg 4096 при `LimitNOFILE=4096`; двух сокетов на сессию достаточно для исчерпания FD. В mtg 2.2.8 ошибка Accept завершает цикл приёма, а вызывающий код игнорирует возврат | `concurrency` выпускается; проверяются RAM и запас FD. Default роли 64, пример inventory 100 |
+| Оба Telegram-реле имели idle timeout 60 s | Граница совпадала с периодом MTProto ping; мобильная пауза вызывала преждевременный разрыв и переподключения | mtg idle 300 s, реле 360 s; буферы реле по 4 KiB |
+| Пустой `mtproxy_hostname` не заменялся fallback | Пустой SNI у access-реле, отсутствующая запись upstream; попадание в Squid вместо mtg | Одинаковый fallback на fake-TLS hostname с обеих сторон |
+| Поле `fake-tls` отсутствует в схеме mtg v2 | Настройка выглядела действующей, но ничего не делала | Удалено; домен fake-TLS уже закодирован в secret |
+| Намеренная анонимизация на локальном TLS-терминаторе не согласована с Squid ACL | Squid видел loopback вместо access-IP и отвечал 403 | Разрешён только локальный анонимный путь для режима nginx+TLS. Публичный firewall сохраняет проверку access-IP; `set_real_ip_from` не добавлен |
+| Половина памяти Squid отдана свободным пулам; upstream не задавал `cache_mem` | Пулы не ограничивали живые структуры; при включённом кеше мог действовать default 256 MB | Свободные пулы 4 MiB; объектный кеш 0/4 MiB; prefetch 0 вместо 10 |
+| FD/workers выпускались только при CPU>1; путь кеша зависел от CPU вместо workers | Одноядерные узлы жили с другими лимитами; на многоядерном узле с одним worker выбирался неверный каталог | Явные FD/workers всегда; каталог определяется числом workers |
+| nginx-роль меняла Squid раньше сравнения его критических параметров; делала reload для startup-only изменений | Новые workers/порты/кеш не применялись корректно, изменённый кеш мог стартовать до инициализации | Централизованный stop/init/start; marker последнего успешного старта. `squid -N -z` выполняется в foreground. ACL/таймауты применяются reload |
+| При каждом прогоне удалялась и создавалась SNI-запись Squid | Постоянный reload общего nginx и удержание прежних workers с туннелями | Удалена безусловная очистка действующего файла |
+| Keepalived проверял только PID | Зависшая служба оставалась «здоровой» | Ограниченный запрос локального manager; три отказа, cooldown, асинхронный restart. Проверка работает и без VRRP через timer |
+| Входящие сокеты не включали SO_KEEPALIVE | Мёртвые клиенты могли занимать ресурсы до часового idle timeout | Явный keepalive Squid и публичного nginx; часовой idle для живого CONNECT сохранён |
+| Nginx всегда имел timeout 3900 s | При увеличении `read_timeout` реле закрывало туннель раньше Squid | Timeout nginx не меньше `read_timeout + 300 s`; валидируются единицы и `client_lifetime` |
+| В nftables IPv6 разрешён только echo-request | После истечения соседского кеша ломался NDP; не проходил Packet Too Big | Разрешены служебные ICMPv6 и NDP с hoplimit 255 |
+| Единственный заполненный вид domain ACL ссылался также на отсутствующий ACL | Ошибка parse и неработающий deploy | Каждая разрешающая строка выпускается по наличию соответствующего списка |
+| Браузерные Accept-Encoding/Connection/Sec-* добавлялись к обычному HTTP | Несогласованное согласование кодирования и кеша | Маскировка добавочными заголовками ограничена внешним CONNECT; удаление идентифицирующих полей сохранено |
+| Публичные defaults резервов стояли в play vars | Inventory не мог переопределить резерв соседних приложений | Defaults вычисляются через `default`, сохраняя значения inventory |
+| Сумма прежних минимумов полного upstream = 480 MiB; Keepalived не ограничивался | Требование 400 MB не выполнялось; OOM не гарантировал восстановление | Общий профиль 380 MiB, cgroup v2, сумма индивидуальных MemoryMax, aiproxy.slice, запрет swap, OOMPolicy/Restart; включены вспомогательные службы |
+
+## Память и применение
+
+Значения inventory в МиБ: Squid 64, nginx 48, unbound 24, mtg 32, CrowdSec 172,
+bouncer 24, haveged 8, health 8. Полный upstream — 380 МиБ (398458880 байт).
+На access mtg не запускается: 348 МиБ без VRRP / 360 МиБ с Keepalived 12.
+Общий nginx учитывается полностью, включая обслуживаемые им соседние приложения.
+ОС и отдельные службы соседей учитываются дополнительным резервом физической RAM.
+
+Живые MemoryMax применяются без рестарта; их сумма уже обеспечивает общий предел.
+Службы переходят в общую slice при штатном рестарте. Принудительный restart общего
+nginx ради переноса не выполняется. Подтверждено на отдельной systemd-службе:
+PID сохраняется при применении лимита, после restart меняется ControlGroup.
+
+`proxy_max_connections=96` применяется к локальным TLS transit-серверам ai-proxy,
+не к Matrix. Его проверка учитывает четыре nginx-слота на сеанс и резерв 128.
+Это admission limit транзитных реле, а не обещание обслужить произвольное число
+клиентов/скорость при заданной памяти. RAM ограничивается cgroup независимо от нагрузки.
+
+## Проверка и её границы
+
+Среда: **локальная WSL Ubuntu 24.04**, отдельный network namespace `unshare -n`,
+собственные cgroup с общим MemoryMax 380 MiB. Пакеты скачаны и распакованы в
+`/home/user/.cache/ai-proxy-validation`; на хост не устанавливались. Рабочие
+серверы и их systemd-службы не использовались. Для проверки lifecycle создаётся
+и удаляется только systemd-служба со случайным именем `aiproxytest…`.
+
+Нативные бинарники: Squid 6.14, nginx 1.24, Unbound 1.19.2, mtg 2.2.8,
+CrowdSec 1.8.1 и firewall-bouncer 0.0.36. CAPI в тесте отключён; четыре реальные
+коллекции CrowdSec загружены. Это не замена проверке репутационных фидов в эксплуатации.
+
+- 96 CONNECT, 48 одновременно, Basic Auth, зашифрованный transit и сквозной TLS
+  до локального origin: сверены 27131904 байта. На access включены кеш и журнал.
+- Действующий туннель пережил graceful reload nginx.
+- Оба Telegram TLS-реле пережили 70 s простоя с передачей после паузы.
+  Backend для этого теста — локальное echo, не Telegram DC.
+- Реальный mtg с concurrency=100 после 160 незавершённых handshakes продолжил приём.
+- CrowdSec обнаружил синтетическую SSH-атаку; через bouncer API получены 200 решений.
+- В прогоне с 70 s idle суммарный cgroup peak 254865408 байт (~243 MiB).
+  Дополнительный прогон с production FD limit 65535: 281624576 байт (~269 MiB,
+  282 MB); в обоих OOM kills = 0. В дополнительном прогоне idle сокращён до 1 s:
+  уже проверенная 70-секундная пауза отдельно не повторялась.
+  Одновременно работали оба Squid, nginx, mtg, unbound, CrowdSec и bouncer.
+  Это измеренный тестовый пик, не прогноз пика рабочего YouTube/Telegram.
+- На отдельной systemd-службе проверены: первый start, неизменённый повторный
+  прогон без смены PID, restart при смене workers, reload при ACL-only изменении.
+- 12 проверок настоящего Ansible resource preflight: небольшие/большие узлы,
+  соседние резервы, unsafe MTProxy limit и превышение 400 MB; syntax-check;
+  тесты health cooldown и сохранения общих firewall-правил.
+
+Запуск: `tests/prepare_native_validation.py`, затем `tests/native_proxy_validation.py`
+от root внутри `unshare -n` с `--cache /home/user/.cache/ai-proxy-validation`.
+Отдельно: `tests/check_resource_plan.py`, `tests/check_systemd_budget.py` (root),
+`python3 -m unittest discover -s tests -p 'test_*.py'`.
+
+YouTube и реальный Telegram-клиент на рабочих узлах в этом испытании не участвовали.
+Фактическая первопричина конкретного рабочего отказа требует журналов узла за этот
+период: OOM/cgroup events, nginx/Squid errors и CrowdSec decisions. Исправлены
+найденные дефекты проекта; причинность каждого рабочего инцидента не заявляется.
+В рабочем inventory domain allowlist не задан: блокировка `googlevideo.com`
+в нём не подтверждена. При введении allowlist видео-CDN должны быть разрешены отдельно.
+
+Сохранён инвариант graceful reload: глобальный `worker_shutdown_timeout` не задан,
+чтобы принудительно не закрывать чужие туннели. Много реальных изменений при
+непрерывно живущих соединениях всё ещё может удерживать несколько поколений workers;
+фиксированная RAM не позволяет обещать неограниченное число таких поколений.
+Безусловный reload устранён, общий RAM-предел и восстановление после OOM действуют.
+
+## Первичные источники
+
+- [mtg defaults, idle и concurrency](https://github.com/9seconds/mtg/blob/v2.2.8/mtglib/init.go),
+  [Serve/Accept](https://github.com/9seconds/mtg/blob/v2.2.8/mtglib/proxy.go),
+  [запуск Serve](https://github.com/9seconds/mtg/blob/v2.2.8/internal/cli/run_proxy.go).
+- [Squid memory_pools_limit](https://www.squid-cache.org/Doc/config/memory_pools_limit/),
+  [cache_mem](https://www.squid-cache.org/Doc/config/cache_mem/),
+  [http_port/tcpkeepalive](https://www.squid-cache.org/Doc/config/http_port/).
+- [nginx stream realip](https://nginx.org/en/docs/stream/ngx_stream_realip_module.html),
+  [systemd resource control](https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html).
+- [ICMPv6 filtering, RFC 4890](https://www.rfc-editor.org/rfc/rfc4890).

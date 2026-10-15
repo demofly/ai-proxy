@@ -54,8 +54,8 @@ upstream fallback_squid {
 # SSL preread server (port 443, no TLS termination)
 # ============================================================================
 server {
-    listen 443;
-    listen [::]:443;
+    listen 443 so_keepalive=60s:10s:3;
+    listen [::]:443 so_keepalive=60s:10s:3;
 
     ssl_preread on;
     proxy_pass $sni_backend;
@@ -77,13 +77,13 @@ server {
 
     # Timeouts: max of all co-deployed projects' requirements
     # 1800s = 30 min (Squid chain: AI API can "think" up to 30 minutes)
-    # MTProxy chain uses shorter timeouts (60s) in its own stream blocks
+    # MTProxy chain uses a 360s idle timeout in its own stream blocks
     proxy_connect_timeout 10s;
     # Предел простоя маршрутизатора держится ВЫШЕ предела Squid (час по
     # требованию владельца): цепочку рвёт наименьший таймер, и рвать её
     # должен Squid — он единственный в цепочке различает паузу в обмене
     # и смерть вышестоящего узла, и пишет об этом в журнал.
-    proxy_timeout 3900s;
+    proxy_timeout {{ [3900, (read_timeout | default('1 hour') | squid_duration_seconds) + 300] | max }}s;
 
     # TCP keepalive: detect dead peers via kernel probes
     proxy_socket_keepalive on;
