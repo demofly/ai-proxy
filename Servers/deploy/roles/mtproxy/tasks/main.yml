@@ -246,7 +246,7 @@
     path: /etc/nginx/nginx.conf
     regexp: '^worker_processes'
     line: "worker_processes {{ proxy_nginx_workers | default(1) }};"
-  notify: Reload nginx
+  notify: Reload nginx for mtproxy
 
 - name: Tune shared nginx worker_connections (owner of the node's nginx)
   ansible.builtin.lineinfile:
