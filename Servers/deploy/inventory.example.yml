@@ -54,12 +54,12 @@ all:
         squid_local_port: 3128
 
   vars:
-    # Automatically min(host RAM / 3, 1000000000 bytes), including shared
+    # Automatically min(max(host RAM / 3, enabled service minima), 1000000000 bytes), including shared
     # nginx and local CrowdSec. Individual limits adapt to the enabled services.
     # Optional LOWER project ceiling in MiB; cannot raise the host-derived cap:
     # proxy_memory_budget_mb: 400
     # Optional partial service overrides in MiB; remaining services stay automatic:
-    # Hard floors are enforced; deployment fails if they do not fit RAM/3.
+    # Minima take priority over RAM/3. Failure only if hard caps/reserves do not fit.
     # proxy_memory_limits:
     #   crowdsec: 192
     # Upper ceiling on ai-proxy TLS transit sessions only, not Matrix.

@@ -52,7 +52,7 @@ def main():
     args = argparse.ArgumentParser()
     args.add_argument('--cache', type=Path, required=True)
     args.add_argument('--idle-seconds', type=int, default=70)
-    args.add_argument('--ram-mib', type=int, default=1200)
+    args.add_argument('--ram-mib', type=int, default=961)
     opts = args.parse_args()
     cache = opts.cache
     work = Path(tempfile.mkdtemp(prefix=f'run-{os.getpid()}-', dir=cache))
@@ -63,9 +63,10 @@ def main():
     squid = cache/'root/usr/sbin/squid'
     nginx = cache/'root/usr/sbin/nginx'
     mtg = next((cache/'mtg').glob('*/mtg'))
-    budget = resources.proxy_memory_budget(opts.ram_mib)
-    plan = resources.proxy_memory_plan(budget['mb'],
-        ['squid', 'unbound', 'nginx', 'mtg', 'crowdsec', 'crowdsec_bouncer', 'haveged', 'health'])
+    enabled = ['squid', 'unbound', 'nginx', 'mtg', 'crowdsec', 'crowdsec_bouncer', 'haveged', 'health']
+    minimum = resources.proxy_memory_plan(0, enabled)['minimum_mb']
+    budget = resources.proxy_memory_budget(opts.ram_mib, minimum_mb=minimum)
+    plan = resources.proxy_memory_plan(budget['mb'], enabled)
     assert plan['fits'], plan
     limits = plan['limits']
     concurrency = min(100, (limits['mtg']-16)*8, (4096-256)//4)

@@ -11,17 +11,21 @@ PROXY_MEMORY_WEIGHTS = {'squid': 32, 'nginx': 24, 'mtg': 8,
                         'crowdsec': 12, 'crowdsec_bouncer': 4}
 
 
-def proxy_memory_budget(ram_mb, limit_mb=None):
-    """RAM/3, capped at exactly 1 GB; an optional inventory limit can lower it."""
+def proxy_memory_budget(ram_mb, limit_mb=None, minimum_mb=0):
+    """Target RAM/3, raised to service floors, with a hard 1 GB/inventory cap."""
     ram_mb = int(ram_mb)
+    minimum_mb = int(minimum_mb)
     if ram_mb <= 0:
         raise ValueError('Host RAM must be positive')
-    ceiling = min(ram_mb * MIB // 3, 1_000_000_000)
+    if minimum_mb < 0:
+        raise ValueError('Service minimum must not be negative')
+    target = min(ram_mb * MIB // 3, 1_000_000_000)
+    ceiling = min(max(target, minimum_mb * MIB), 1_000_000_000)
     if limit_mb is not None:
         if int(limit_mb) <= 0:
             raise ValueError('proxy_memory_budget_mb must be positive')
         ceiling = min(ceiling, int(limit_mb) * MIB)
-    return {'bytes': ceiling, 'mb': ceiling // MIB}
+    return {'bytes': ceiling, 'mb': ceiling // MIB, 'target_bytes': target}
 
 
 def proxy_memory_plan(available_mb, enabled, overrides=None):

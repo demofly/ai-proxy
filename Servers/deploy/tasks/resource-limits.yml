@@ -20,7 +20,7 @@
     that:
       - _proxy_resource_units | map(attribute='memory_mb') | map('int') | sum == mem_planned_mb | int
       - mem_planned_mb | int <= _proxy_budget.mb | int
-      - _proxy_budget.bytes | int <= ansible_memtotal_mb | int * 1048576 // 3
+      - _proxy_budget.bytes | int <= [ansible_memtotal_mb | int * 1048576 // 3, _proxy_minimum_plan.minimum_mb | int * 1048576] | max
       - _proxy_budget.bytes | int <= 1000000000
 
 - name: Deploy the aggregate project memory limit

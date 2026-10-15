@@ -54,7 +54,7 @@
     # проекты. Остаток нужен ядру, страничному кешу, sshd и журналу: без него
     # узел уходит в отказ раньше, чем сработает предел любой отдельной службы.
     #
-    # Resource policy: at most one third of host RAM and 1000000000 bytes.
+    # Target RAM/3, raised to service minima; at most 1000000000 bytes.
     # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
@@ -67,7 +67,7 @@
       tags: [always]
       ansible.builtin.set_fact:
         mem_reserve_share: '{{ mem_reserve_share | default(0.25) }}'
-        # The RAM/3 project cap plus measured foreign limits replaces
+        # The host-derived project budget plus measured foreign limits replaces
         # the old arbitrary 35% split. An operator can still request a lower share.
         mem_share_when_shared: '{{ mem_share_when_shared | default(1.0) }}'
         mem_system_min_mb: '{{ mem_system_min_mb | default(128) }}'
@@ -182,7 +182,7 @@
           - mem_foreign_reserved_mb | int >= 0
           - mem_system_min_mb | int >= 128
           - proxy_memory_budget_mb | default(1) | int > 0
-        fail_msg: 'Invalid resource reserves or project cap. An optional proxy_memory_budget_mb must be positive; RAM/3 and 1000000000 bytes remain hard upper bounds.'
+        fail_msg: 'Invalid resource reserves or project cap. An optional proxy_memory_budget_mb must be positive; 1000000000 bytes remains a hard upper bound.'
 
     - name: Collect current service memory limits
       tags: [always]
@@ -217,10 +217,31 @@
           {{ [mem_system_min_mb | int,
               (ansible_memtotal_mb | int * (mem_reserve_when_shared_share | float if shared_host | bool else mem_reserve_share | float)) | round(0, 'ceil') | int] | max }}
 
+    - name: Identify enabled services and fixed memory limits
+      tags: [always]
+      ansible.builtin.set_fact:
+        _proxy_enabled_services: >-
+          {{ ['squid', 'unbound', 'haveged', 'health']
+             + (['nginx'] if _proxy_nginx_needed | bool else [])
+             + (['mtg'] if proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool else [])
+             + (['keepalived'] if proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined else [])
+             + (['crowdsec', 'crowdsec_bouncer'] if crowdsec_enabled | default(false) | bool else []) }}
+        _proxy_memory_overrides: >-
+          {{ (proxy_memory_limits | default({}))
+             | combine({'crowdsec': crowdsec_memory_mb} if crowdsec_memory_mb is defined else {})
+             | combine({'crowdsec_bouncer': crowdsec_fw_bouncer_memory_mb} if crowdsec_fw_bouncer_memory_mb is defined else {}) }}
+
+    - name: Calculate minimum service memory requirements
+      tags: [always]
+      ansible.builtin.set_fact:
+        _proxy_minimum_plan: '{{ 0 | proxy_memory_plan(_proxy_enabled_services, _proxy_memory_overrides) }}'
+
     - name: Calculate the host-derived project ceiling
       tags: [always]
       ansible.builtin.set_fact:
-        _proxy_budget: '{{ ansible_memtotal_mb | proxy_memory_budget(proxy_memory_budget_mb | default(none)) }}'
+        _proxy_budget: >-
+          {{ ansible_memtotal_mb | proxy_memory_budget(proxy_memory_budget_mb | default(none),
+                                                       _proxy_minimum_plan.minimum_mb) }}
 
     - name: Calculate allocatable memory without exceeding physical RAM
       tags: [always]
@@ -231,21 +252,12 @@
                ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int] | min
              if shared_host | bool else [_proxy_budget.mb | int,
                ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int] | min }}
-        _proxy_enabled_services: >-
-          {{ ['squid', 'unbound', 'haveged', 'health']
-             + (['nginx'] if _proxy_nginx_needed | bool else [])
-             + (['mtg'] if proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool else [])
-             + (['keepalived'] if proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined else [])
-             + (['crowdsec', 'crowdsec_bouncer'] if crowdsec_enabled | default(false) | bool else []) }}
 
     - name: Distribute the project budget across enabled services
       tags: [always]
       ansible.builtin.set_fact:
         _proxy_memory_plan: >-
-          {{ mem_allocatable_mb | proxy_memory_plan(_proxy_enabled_services,
-             (proxy_memory_limits | default({}))
-             | combine({'crowdsec': crowdsec_memory_mb} if crowdsec_memory_mb is defined else {})
-             | combine({'crowdsec_bouncer': crowdsec_fw_bouncer_memory_mb} if crowdsec_fw_bouncer_memory_mb is defined else {})) }}
+          {{ mem_allocatable_mb | proxy_memory_plan(_proxy_enabled_services, _proxy_memory_overrides) }}
 
     - name: Calculate per-service memory limits
       tags: [always]
@@ -337,26 +349,31 @@
           {{ mem_planned_mb }} МиБ при выделяемом объёме {{ mem_allocatable_mb }} МиБ.
           Минимумы и явно заданные пределы требуют {{ _proxy_memory_plan.minimum_mb }} МиБ;
           они не снижаются ради размещения на узле.
-          Потолок min(RAM/3, 1 GB) с учётом inventory — {{ _proxy_budget.bytes }} байт;
+          Цель RAM/3 — {{ _proxy_budget.target_bytes }} байт;
+          бюджет с учётом минимумов, потолка 1 GB и inventory — {{ _proxy_budget.bytes }} байт;
           RAM {{ ansible_memtotal_mb }} МиБ, резерв ОС {{ mem_system_reserved_mb }} МиБ,
           резерв соседей {{ mem_foreign_effective_mb }} МиБ.
           Увеличьте RAM или пересмотрите размещение и явные переопределения пределов,
           сохраняя минимумы служб из filter_plugins/resources.py.
         success_msg: >-
           План памяти помещается: {{ mem_planned_mb }} из {{ mem_allocatable_mb }} МиБ
-          выделяемых (RAM {{ ansible_memtotal_mb }} МиБ) — Squid {{ mem_squid_mb }},
-          unbound {{ mem_unbound_mb }}, nginx {{ mem_nginx_mb }},
-          MTProxy {{ mem_mtproxy_mb }}, CrowdSec {{ mem_crowdsec_mb }}+{{ mem_crowdsec_bouncer_mb }} МиБ
+          выделяемых (RAM {{ ansible_memtotal_mb }} МиБ).
+          Пределы включённых служб (МиБ):
+          {{ _proxy_memory_plan.limits | dict2items | selectattr('key', 'in', _proxy_enabled_services) | items2dict }}
 
     # Both projects enforce the complete physical-RAM plan.
     - name: Report the whole-node memory plan
       tags: [always]
       ansible.builtin.debug:
         msg: >-
-          ai-proxy {{ mem_planned_mb }} MiB <= RAM/3 with 1 GB cap ({{ _proxy_budget.bytes }} bytes);
+          ai-proxy {{ mem_planned_mb }} MiB; RAM/3 target {{ _proxy_budget.target_bytes }} bytes;
+          service minima/fixed limits {{ _proxy_minimum_plan.minimum_mb }} MiB;
+          project cap {{ _proxy_budget.bytes }} bytes (hard ceiling 1 GB);
           foreign {{ mem_foreign_effective_mb }} MiB + OS {{ mem_system_reserved_mb }} MiB;
-          host {{ ansible_memtotal_mb }} MiB. MTProxy effective sessions
+          host {{ ansible_memtotal_mb }} MiB.
+          {% if 'mtg' in _proxy_enabled_services %}MTProxy effective sessions
           {{ mtproxy_effective_max_connections }} (inventory ceiling {{ mtproxy_max_connections | default(64) }}).
+          {% endif %}
           TLS transit effective sessions {{ proxy_effective_max_connections }}
           (inventory ceiling {{ proxy_max_connections | default(96) }}), Squid FD {{ squid_fd_limit }}.
 

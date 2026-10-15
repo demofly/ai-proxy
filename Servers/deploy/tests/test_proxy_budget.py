@@ -11,16 +11,29 @@ SERVICES = ['squid','unbound','nginx','mtg','crowdsec','crowdsec_bouncer','haveg
 
 
 class BudgetTests(unittest.TestCase):
-    def test_one_third_and_one_gigabyte_never_exceeded(self):
+    def test_one_third_target_and_one_gigabyte_cap_without_minima(self):
         for ram in range(1, 16385):
             budget = resources.proxy_memory_budget(ram)
             self.assertEqual(budget['bytes'], min(ram*1048576//3, 1_000_000_000))
             self.assertLessEqual(budget['mb']*1048576, budget['bytes'])
 
-    def test_lower_inventory_ceiling_and_unraiseable_host_cap(self):
+    def test_lower_inventory_ceiling_and_hard_gigabyte_cap(self):
         self.assertEqual(resources.proxy_memory_budget(900, 296)['mb'], 296)
         self.assertEqual(resources.proxy_memory_budget(900, 400)['mb'], 300)
         self.assertEqual(resources.proxy_memory_budget(65536, 4096)['bytes'], 1_000_000_000)
+
+    def test_minima_override_target_but_not_hard_caps(self):
+        for ram in (534, 900, 961, 1199, 1200, 1967, 4096):
+            for minimum in (368, 400, 448, 1024):
+                budget = resources.proxy_memory_budget(ram, minimum_mb=minimum)
+                expected = min(max(ram*1048576//3, minimum*1048576), 1_000_000_000)
+                self.assertEqual(budget['bytes'], expected)
+        self.assertEqual(resources.proxy_memory_budget(961, minimum_mb=368)['mb'], 368)
+        self.assertEqual(resources.proxy_memory_budget(961, minimum_mb=400)['mb'], 400)
+        self.assertEqual(resources.proxy_memory_budget(1967, minimum_mb=368)['mb'], 655)
+        self.assertEqual(resources.proxy_memory_budget(961, 300, minimum_mb=400)['mb'], 300)
+        with self.assertRaises(ValueError):
+            resources.proxy_memory_budget(961, minimum_mb=-1)
 
     def test_distribution_rounding_and_service_floors(self):
         for budget in range(400, 954):

@@ -44,9 +44,10 @@ def main():
         with tempfile.TemporaryDirectory(prefix=name) as temp:
             fixture = Path(temp)/'play.yml'
             fixture.write_text(yaml.safe_dump([dict(hosts='localhost', gather_facts=False,
-                vars=dict(_proxy_resource_units=[{'name':unit, 'memory_mb':64}],
-                          mem_planned_mb=64, ansible_memtotal_mb=900,
-                          _proxy_budget={'mb':300, 'bytes':300*1048576}), tasks=tasks)], sort_keys=False))
+                vars=dict(_proxy_resource_units=[{'name':unit, 'memory_mb':400}],
+                          mem_planned_mb=400, ansible_memtotal_mb=961,
+                          _proxy_minimum_plan={'minimum_mb':400},
+                          _proxy_budget={'mb':400, 'bytes':400*1048576}), tasks=tasks)], sort_keys=False))
             result = subprocess.run(['ansible-playbook', '-i', 'localhost,', '-c', 'local', str(fixture)],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             if result.returncode:
@@ -54,12 +55,12 @@ def main():
         after = run('systemctl', 'show', unit, '-p', 'MainPID', '--value')
         assert before == after and int(after) > 0, (before, after)
         group = run('systemctl', 'show', unit, '-p', 'ControlGroup', '--value')
-        assert int((Path('/sys/fs/cgroup')/group.lstrip('/')/'memory.max').read_text()) == 64*1048576
+        assert int((Path('/sys/fs/cgroup')/group.lstrip('/')/'memory.max').read_text()) == 400*1048576
         print('Live MemoryMax applied; original PID and connections preserved')
         subprocess.run(['systemctl', 'restart', unit], check=True)
         group = run('systemctl', 'show', unit, '-p', 'ControlGroup', '--value')
         assert group.startswith('/'+slice_name+'/'), group
-        assert int((Path('/sys/fs/cgroup')/slice_name/'memory.max').read_text()) == 300*1048576
+        assert int((Path('/sys/fs/cgroup')/slice_name/'memory.max').read_text()) == 400*1048576
         print('Next normal restart enters the capped project slice')
         # Exercise the deployment's actual stop/init/start versus reload logic.
         class Manager(BaseHTTPRequestHandler):
