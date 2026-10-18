@@ -269,7 +269,7 @@ access без доверенного материала при прогоне, �
 
 | Устройство upstream | Кто принимает TLS | Порт, к которому обращается access |
 |---|---|---|
-| MTProxy выключен | сам Squid (`https_port`) | `squid_port` |
+| MTProxy выключен | сам Squid (`https_port`) | `proxy_port` |
 | MTProxy включён | nginx-терминатор за маршрутизатором SNI | 443 |
 
 Во второй ветке маршрутизатор разбирает имя из SNI и направляет соединение
@@ -486,7 +486,7 @@ htpasswd -B -C 12 -bn пользователь пароль >> passwd
 
 | Переменная | Описание | По умолчанию |
 |------------|----------|--------------|
-| `squid_port` | Порт Squid, на который подключаются access-ноды | 443 (обе группы в образце инвентаря) |
+| `proxy_port` | Внешний порт прокси: nginx на 443 либо прямой вход Squid без nginx | 443 (обе группы в образце инвентаря) |
 | `squid_upstream_hosts` | Непустой список имён из группы upstreams без повторов; переопределяется для конкретного access, определяет его родителей Squid | Вся группа upstreams |
 | `enable_auth` | Включить аутентификацию | true (access) |
 | `enable_logging` | Включить журналирование | true (access) |
@@ -703,7 +703,7 @@ Access nodes ──┤            │     ├─ SNI=max.ru / <mtproxy_hostname,
 
 `ssl_preread` не находит ClientHello в plain-HTTP соединении, поэтому `$ssl_preread_server_name` пуст и срабатывает `default fallback_squid` из общей SNI-карты. Squid принимает такое соединение только с `require-proxy-header`, а реальный IP клиента приходит от nginx через PROXY protocol.
 
-При `behind_nginx: false` Squid слушает `squid_port` напрямую, а nginx на upstream не нужен вовсе.
+При `behind_nginx: false` Squid слушает `proxy_port` напрямую, а nginx на upstream не нужен вовсе.
 
 **Ключевые характеристики:**
 - **Единый порт на upstream**: nginx :443 — и MTProxy по SNI, и цепочка Squid по умолчанию
@@ -723,7 +723,7 @@ upstreams:
     upstream-01:
       ansible_host: 198.51.100.11
   vars:
-    squid_port: 443
+    proxy_port: 443
 ```
 
 Параметры failover:

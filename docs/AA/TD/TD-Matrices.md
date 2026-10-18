@@ -1,7 +1,7 @@
 <!-- [AIGD] -->
 # TD-Matrices — Матрицы трассируемости M1–M10
 
-**Последняя правка AI:** 2026-08-29T04:20:00Z
+**Последняя правка AI:** 2026-10-19
 
 ## Описание
 
@@ -78,8 +78,8 @@ access-узлам, выпускается ими же, а не ролью рез
 | Компонент | Порт | Протокол | Направление | Назначение |
 |---|---|---|---|---|
 | C3-SA-001 Squid Access | 127.0.0.1:3128 | HTTP CONNECT (PROXY protocol) | Входящий | Клиентские подключения через nginx SNI Router (:443) |
-| C3-SA-001 Squid Access | → upstream:`squid_port` (443 в образце) | HTTP CONNECT | Исходящий | Каскадирование на upstream через `cache_peer`; соединение приходит на маршрутизатор SNI и попадает в бэкенд по умолчанию |
-| C3-SU-001 Squid Upstream | `squid_port` (443 за nginx SNI) | HTTP CONNECT | Входящий | Запросы от access-прокси; при `nginx_on_443` слушает `127.0.0.1:squid_local_port` с `require-proxy-header` |
+| C3-SA-001 Squid Access | → upstream:`proxy_port` (443 в образце) | HTTP CONNECT | Исходящий | Каскадирование на upstream через `cache_peer`; соединение приходит на маршрутизатор SNI и попадает в бэкенд по умолчанию |
+| C3-SU-001 Squid Upstream | `proxy_port` (443 за nginx SNI) | HTTP CONNECT | Входящий | Запросы от access-прокси; при `nginx_on_443` слушает `127.0.0.1:squid_local_port` с `require-proxy-header` |
 | C3-SU-001 Squid Upstream | 443 | HTTPS | Исходящий | Запросы к AI API |
 | C3-NX-001 nginx SNI | 443 | TLS (L4 stream) | Входящий | Внешние TLS-подключения |
 | C3-NX-001 nginx SNI | → backend | TCP | Исходящий | Маршрутизация по SNI на внутренние сервисы |

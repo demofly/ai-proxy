@@ -50,7 +50,7 @@ table inet filter {
 
         # Allow Squid only from access proxies
 {% for host in groups['access_proxies'] %}
-        ip saddr {{ hostvars[host]['ansible_host'] }} tcp dport {{ squid_port }} accept
+        ip saddr {{ hostvars[host]['ansible_host'] }} tcp dport {{ proxy_port }} accept
 {% endfor %}
 
         # Allow DNS (unbound) from access proxies - both transports

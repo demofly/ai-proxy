@@ -1,7 +1,7 @@
 <!-- [AIGD] -->
 # DD-SourceMap — Карта источников данных
 
-**Последняя правка AI:** 2026-10-18
+**Последняя правка AI:** 2026-10-19
 
 ## Описание
 
@@ -43,7 +43,7 @@
 | Паттерн | Описание | Пример |
 |---|---|---|
 | `*.j2` | Шаблоны Jinja2 | `squid-access.conf.j2`, `squid-upstream.conf.j2`, `nftables-upstream.conf.j2`, `iptables-upstream.rules.j2`, `unbound.conf.j2`, `mtg.toml.j2`, `keepalived.conf.j2` |
-| `{{ variable }}` | Подстановка переменных | `{{ squid_port }}`, `{{ mtproxy_secret }}` |
+| `{{ variable }}` | Подстановка переменных | `{{ proxy_port }}`, `{{ mtproxy_secret }}` |
 | `{% for %}` | Итерация по спискам | `{% for domain in allowed_domains %}` |
 
 ### Целевые конфигурации (persistent)

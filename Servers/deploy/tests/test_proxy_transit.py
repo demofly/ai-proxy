@@ -28,13 +28,13 @@ class ProxyTransitTests(unittest.TestCase):
                                 'children': {
                                     'access_proxies': {'hosts': {'access-test': {'ansible_host': '192.0.2.10'}}},
                                     'upstreams': {'hosts': {'upstream-test': {
-                                        'ansible_host': '198.51.100.20', 'squid_port': 443,
+                                        'ansible_host': '198.51.100.20', 'proxy_port': 443,
                                         'mtproxy_enabled': True},
                                         'upstream-two': {'ansible_host': '198.51.100.21',
-                                                         'squid_port': 443, 'mtproxy_enabled': True}}}}}}
+                                                         'proxy_port': 443, 'mtproxy_enabled': True}}}}}}
             (tmp / 'inventory.yml').write_text(yaml.safe_dump(inventory), encoding='utf-8')
             values = dict(enable_caching=False, enable_logging=False, enable_auth=True,
-                          nginx_on_443=True, squid_port=443, squid_workers=1,
+                          nginx_on_443=True, proxy_port=443, squid_workers=1,
                           proxy_role='access', ansible_os_family='Debian', _squid_version_raw={'stdout': '--with-gnutls'})
             values.update(overrides or {})
             pool = [task for task in source['pre_tasks'] if task['name'] in (

@@ -1,7 +1,7 @@
 <!-- [AIGD] -->
 # DE-CF-001 — Конфигурационные параметры
 
-**Последняя правка AI:** 2026-10-18
+**Последняя правка AI:** 2026-10-19
 
 ## Описание
 
@@ -55,7 +55,7 @@
 | Параметр | Тип | Значение по умолчанию | Описание |
 |---|---|---|---|
 | `proxy_role` | string | `access` | Роль прокси |
-| `squid_port` | integer | `443` | Публичный порт Squid |
+| `proxy_port` | integer | `443` | Публичный порт Squid |
 | `enable_auth` | boolean | `true` | Включение аутентификации |
 | `enable_logging` | boolean | `true` | Включение журналирования |
 | `enable_caching` | boolean | `true` | Включение кеширования |
@@ -79,7 +79,7 @@
 | Параметр | Тип | Значение по умолчанию | Описание |
 |---|---|---|---|
 | `proxy_role` | string | `upstream` | Роль прокси |
-| `squid_port` | integer | `443` в образце | Внешняя точка upstream: TLS Squid либо nginx; локальный Squid за nginx — 3128 |
+| `proxy_port` | integer | `443` в образце | Внешняя точка upstream: TLS Squid либо nginx; локальный Squid за nginx — 3128 |
 | `enable_auth` | boolean | `false` | Аутентификация отключена |
 | `enable_logging` | boolean | `false` | Журналирование отключено |
 | `enable_caching` | boolean | `false` | Кеширование отключено |
@@ -107,7 +107,7 @@
 ## Связанные требования
 
 - [C2-FR-008](../../C2/C2-FR-008.md) — Автоматизированное развёртывание (Ansible)
-- [C2-FR-001](../../C2/C2-FR-001.md) — Проксирование (cache_peer, squid_port)
+- [C2-FR-001](../../C2/C2-FR-001.md) — Проксирование (cache_peer, proxy_port)
 - [C2-NF-001](../../C2/C2-NF-001.md) — Высокая доступность (keepalived_*)
 - [C2-NF-003](../../C2/C2-NF-003.md) — Производительность (SMP, memory)
 - [C3-AD-001](../../C3/C3-AD-001.md) — Ansible Deployment System

@@ -56,9 +56,9 @@ proxy_protocol_access deny all
 # целевого сервиса — недоступен наблюдателю между узлами; прежде он шёл
 # открытым текстом, и адресат обращения был виден, хотя содержимое защищено
 # сквозным шифрованием клиента с сервисом.
-https_port {{ squid_port }} tls-cert=/etc/squid/transit.crt tls-key=/etc/squid/transit.key tcpkeepalive=60,10,30
+https_port {{ proxy_port }} tls-cert=/etc/squid/transit.crt tls-key=/etc/squid/transit.key tcpkeepalive=60,10,30
 {% else %}
-http_port {{ squid_port }} tcpkeepalive=60,10,30
+http_port {{ proxy_port }} tcpkeepalive=60,10,30
 {% endif %}
 {% endif %}
 

@@ -1199,7 +1199,7 @@
         - name: "Разрешить Squid только для access в UFW"
           community.general.ufw:
             rule: allow
-            port: "{{ squid_port }}"
+            port: "{{ proxy_port }}"
             proto: tcp
             from_ip: "{{ hostvars[item]['ansible_host'] }}"
           loop: "{{ groups['access_proxies'] }}"
@@ -1216,7 +1216,7 @@
             delete: true
           loop: "{{ groups['access_proxies'] }}"
           failed_when: false
-          when: squid_port | string != '443' and not (mtproxy_enabled | default(false) | bool)
+          when: proxy_port | string != '443' and not (mtproxy_enabled | default(false) | bool)
 
         - name: "Разрешить TLS MTProxy для access в UFW"
           community.general.ufw:

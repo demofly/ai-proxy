@@ -54,20 +54,20 @@ class FirewallTests(unittest.TestCase):
         self.assertIn('flush chain inet filter input', text)
 
     def test_ipv4_ipv6_and_separate_mtproxy_port(self):
-        for squid_port in (443, 8080):
-            values = dict(squid_chain='SQUID-PROXY', squid_port=squid_port, mtproxy_enabled=True,
+        for proxy_port in (443, 8080):
+            values = dict(squid_chain='SQUID-PROXY', proxy_port=proxy_port, mtproxy_enabled=True,
                           groups={'access_proxies':['access']},
                           hostvars={'access':{'ansible_host':'198.51.100.10'}},
                           dns_allowed_clients=['198.51.100.10'])
             for version, source in (('iptables','192.0.2.99'), ('ip6tables','2001:db8::99')):
                 rules = ENV.from_string((DEPLOY/f'templates/{version}-upstream.rules.j2').read_text()).render(values)
-                for port in (squid_port, 443, 53):
+                for port in (proxy_port, 443, 53):
                     self.assertEqual(verdict(rules, source, port), 'DROP', (version, port))
                 self.assertEqual(verdict(rules, source, 53, 'udp'), 'DROP')
                 self.assertEqual(verdict(rules, source, 22), 'RETURN')
                 self.assertEqual(verdict(rules, source, 7881), 'RETURN')
                 if version == 'iptables':
-                    self.assertEqual(verdict(rules, '198.51.100.10', squid_port), 'ACCEPT')
+                    self.assertEqual(verdict(rules, '198.51.100.10', proxy_port), 'ACCEPT')
                     self.assertEqual(verdict(rules, '198.51.100.10', 443), 'ACCEPT')
 
     @unittest.skipUnless(os.name == 'posix', 'requires bash')

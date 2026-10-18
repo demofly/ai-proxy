@@ -115,7 +115,7 @@ def main():
                   mem_squid_mb=limits['squid'], squid_tls_sni='transit.internal', allowed_domains=[], allowed_domain_patterns=[],
                   groups={'access_proxies':['access'], 'upstreams':['up']},
                   hostvars={'access': {'ansible_host':'127.0.0.1'},
-                            'up':{'ansible_host':'127.0.0.1', 'squid_port':443, 'mtproxy_enabled':True}},
+                            'up':{'ansible_host':'127.0.0.1', 'proxy_port':443, 'mtproxy_enabled':True}},
                   squid_local_port=3128, squid_mgmt_port=3129, enable_auth=False,
                   mtproxy_local_port=2083, squid_tls_term_port=4444,
                   mtproxy_tls_port=4443, mtproxy_relay_port=9443, mtproxy_hostname='public-proxy.example',

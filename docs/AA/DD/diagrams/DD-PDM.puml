@@ -22,7 +22,7 @@ package "Access Proxy (РФ)" as access_tier {
     acl allowed_domains dstdomain ...
     acl allowed_domain_regexp dstdom_regex -i ...
     auth_param basic program ncsa_auth
-    cache_peer <upstream> parent {squid_port}
+    cache_peer <upstream> parent {proxy_port}
     access_log squid (native format)
     ..
     права: 644 (root:root)

@@ -13,7 +13,7 @@ participant "Squid\nupstream-узла" as SQUID
 
 == Ветка А: Squid слушает сам (MTProxy выключен) ==
 
-ACC -> SQUID : TLS на squid_port\n(https_port с сертификатом участка)
+ACC -> SQUID : TLS на proxy_port\n(https_port с сертификатом участка)
 note right of ACC
   Проверка принимающей стороны:
   tls-no-default-ca отсекает системные УЦ,
@@ -41,7 +41,7 @@ note over ACC, SQUID
   Без шифрования участка наблюдателю между узлами виден адресат.
 
   Порт назначения выбирает сторона access по устройству
-  принимающего узла: 443 при маршрутизаторе, иначе squid_port.
+  принимающего узла: 443 при маршрутизаторе, иначе proxy_port.
 end note
 
 @enduml

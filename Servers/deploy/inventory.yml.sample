@@ -36,8 +36,8 @@ all:
       vars:
         # access — клиентская точка входа; upstream — транспортный узел.
         proxy_role: access
-        # Внешний порт Squid без nginx; при работе за nginx вход занят на 443.
-        squid_port: 443
+        # Внешний порт прокси: 443 при работе за nginx; без nginx его слушает Squid.
+        proxy_port: 443
         # На access включает Basic Auth через локальный файл deploy/passwd.
         # false закрывает клиентский доступ целиком, а не разрешает анонимный.
         enable_auth: true
@@ -107,7 +107,7 @@ all:
         # Выбирает транспортную конфигурацию Squid и правила ограничения доступа.
         proxy_role: upstream
         # Порт назначения access → upstream; при MTProxy TLS идёт через nginx:443.
-        squid_port: 443
+        proxy_port: 443
         # Upstream принимает доверенные access без пользовательского пароля;
         # доступ ограничивается ACL и firewall, а исходный IP анонимизируется.
         enable_auth: false

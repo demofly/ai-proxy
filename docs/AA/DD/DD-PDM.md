@@ -2,7 +2,7 @@
 <!-- [AITS] 2026-08-30T11:52:49Z -->
 # DD-PDM — Физическая модель данных
 
-**Последняя правка AI:** 2026-08-29T05:48:58Z
+**Последняя правка AI:** 2026-10-19
 
 ## Описание
 
@@ -66,7 +66,7 @@ auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
 auth_param basic realm "Squid Proxy Authentication"
 
 # Цепочка к upstream
-cache_peer <upstream_ip> parent {squid_port} 0 no-query userhash ...
+cache_peer <upstream_ip> parent {proxy_port} 0 no-query userhash ...
 
 # Формат журнала — стандартный squid (native format)
 # AI-GENERATED — NOT REVIEWED: SECTION END
@@ -158,7 +158,7 @@ all:
         access-02: { ansible_host: <IP>, keepalived_state: BACKUP, ... }
       vars:
         proxy_role: access
-        squid_port: 443
+        proxy_port: 443
         enable_auth: true
         ...
     upstreams:
@@ -167,7 +167,7 @@ all:
         upstream-02: { ansible_host: <IP> }
       vars:
         proxy_role: upstream
-        squid_port: 443
+        proxy_port: 443
         behind_nginx: true
         squid_local_port: 3128
         ...

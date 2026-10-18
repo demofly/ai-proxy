@@ -72,7 +72,7 @@ acl localhost_pp src 127.0.0.1
 proxy_protocol_access allow localhost_pp
 proxy_protocol_access deny all
 {% else %}
-http_port {{ squid_port }} tcpkeepalive=60,10,30
+http_port {{ proxy_port }} tcpkeepalive=60,10,30
 {% endif %}
 
 {% if groups['upstreams'] is defined and groups['upstreams'] | length > 0 %}
@@ -88,7 +88,7 @@ http_port {{ squid_port }} tcpkeepalive=60,10,30
 {#- Порт зависит от устройства принимающего узла: при включённом MTProxy там
     работает маршрутизатор по имени SNI и слушает 443, разбирая имя и направляя
     соединение к терминатору; иначе TLS принимает сам Squid на своём порту. -#}
-{% set transit_port = 443 if (upstream.mtproxy_enabled | default(false) | bool) else upstream.squid_port %}
+{% set transit_port = 443 if (upstream.mtproxy_enabled | default(false) | bool) else upstream.proxy_port %}
 {#- tls-cafile задаёт доверенный якорь: сертификат участка, выпущенный развёртыванием.
     tls-no-default-ca отсекает системные удостоверяющие центры — доверять следует
     ровно одному сертификату, а не всякому, кем-либо подписанному.
@@ -98,7 +98,7 @@ cache_peer {{ upstream.ansible_host }} parent {{ transit_port }} 0 no-query user
 {#- Участок не шифруется: содержимое обращений защищено сквозным шифрованием
     клиента с сервисом, но заголовок CONNECT идёт открытым текстом, и наблюдателю
     между узлами виден адресат обращения. Включается признаком squid_transit_tls. -#}
-cache_peer {{ upstream.ansible_host }} parent {{ upstream.squid_port }} 0 no-query userhash connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
+cache_peer {{ upstream.ansible_host }} parent {{ upstream.proxy_port }} 0 no-query userhash connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
 {% endif %}
 {% endfor %}
 
