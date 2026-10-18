@@ -1,5 +1,5 @@
 {
-  "mode": "proxy.example.com:443",
+  "mode": "pattern",
   "sync": false,
   "autoBackup": false,
   "passthrough": "",
@@ -29,86 +29,38 @@
       "include": [
         {
           "type": "regex",
-          "title": "Gemini",
-          "pattern": "^https?://(.*\\.)*((gemini|clients|aistudio|play)\\.google\\.com|(gstatic|googleusercontent|googleapis)\\.com)($|/)",
+          "title": "[AI Proxy:assistants] AI: ассистенты",
+          "pattern": "^(?:https?|wss?)://(?:(?:[a-z0-9-]+\\.)*(?:ai\\.google\\.dev|aistudio\\.google\\.com|anthropic\\.com|bing\\.com|bing\\.net|bingapis\\.com|chatgpt\\.com|claude\\.ai|claude\\.com|claudeusercontent\\.com|copilot\\.cloud\\.microsoft|copilot\\.microsoft\\.com|deepl\\.com|deepmind\\.google|designer\\.microsoft\\.com|gemini\\.google\\.com|grok\\.com|grokipedia\\.com|grokusercontent\\.com|labs\\.google|microsoftusercontent\\.com|mistral\\.ai|notebooklm\\.cloud\\.google\\.com|notebooklm\\.google\\.com|oaistatic\\.com|oaistatsig\\.com|oaiusercontent\\.com|openai\\.com|perplexity\\.ai|x\\.ai)|(?:aiplatform\\.googleapis\\.com|aisandbox\\-pa\\.googleapis\\.com|generativelanguage\\.googleapis\\.com|notebooklm\\-pa\\.googleapis\\.com))\\.?(?::[0-9]{1,5})?(?:[/?#]|$)",
           "active": true
         },
         {
           "type": "regex",
-          "title": "ChatGPT",
-          "pattern": "^https?://(.*\\.)*(chatgpt|openai|oaistatic)\\.com($|/)",
+          "title": "[AI Proxy:development] Разработка и AI-модели",
+          "pattern": "^(?:https?|wss?)://(?:(?:[a-z0-9-]+\\.)*(?:bolt\\.new|cursor\\-cdn\\.com|cursor\\.com|cursor\\.sh|cursorapi\\.com|cursorvm\\.com|fal\\.ai|fal\\.media|fal\\.run|gallery\\.vsassets\\.io|gallerycdn\\.vsassets\\.io|github\\.com|github\\.dev|githubassets\\.com|githubcopilot\\.com|githubpreview\\.dev|githubusercontent\\.com|hf\\.co|hf\\.space|huggingface\\.co|lovable\\.app|lovable\\.dev|replicate\\.com|replicate\\.delivery|replicateassets\\.com|replit\\.app|replit\\.com|replit\\.dev|spacex\\.ai|stackblitz\\.com|v0\\.app|v0\\.dev|v0sdk\\.com|vscode\\-cdn\\.net|vscode\\-unpkg\\.net|vscode\\.dev|vsmarketplacebadges\\.dev|webcontainer\\-api\\.io|webcontainer\\.io)|(?:anysphere\\-binaries\\.s3\\.us\\-east\\-1\\.amazonaws\\.com|assets\\.vercel\\.com|code\\.visualstudio\\.com|default\\.exp\\-tas\\.com|download\\.visualstudio\\.microsoft\\.com|github\\-cloud\\.s3\\.amazonaws\\.com|gvsmhepiuiax2e6y\\.public\\.blob\\.vercel\\-storage\\.com|hebbkx1anhila5yf\\.public\\.blob\\.vercel\\-storage\\.com|marketplace\\.visualstudio\\.com|update\\.code\\.visualstudio\\.com|vscode\\-sync\\-insiders\\.trafficmanager\\.net|vscode\\-sync\\.trafficmanager\\.net|vscode\\.download\\.prss\\.microsoft\\.com))\\.?(?::[0-9]{1,5})?(?:[/?#]|$)",
           "active": true
         },
         {
           "type": "regex",
-          "title": "Claude",
-          "pattern": "^https?://(.*\\.)*(claude\\.(ai|com)|(anthropic|claudeusercontent)\\.com|sentry\\.io)($|/)",
+          "title": "[AI Proxy:media] AI: изображение, видео и звук",
+          "pattern": "^(?:https?|wss?)://(?:(?:[a-z0-9-]+\\.)*(?:cdn\\-luma\\.com|elevenlabs\\.io|elevenmusic\\.io|elevenreader\\.io|heygen\\.ai|heygen\\.com|ideogram\\.ai|krea\\.ai|leonardo\\.ai|lumalabs\\.ai|midjourney\\.com|pika\\.art|recraft\\.ai|runwayml\\.com|suno\\.ai|suno\\.com|udio\\.com|unchartedlabs\\.net)|(?:d3phaj0sisr2ct\\.cloudfront\\.net))\\.?(?::[0-9]{1,5})?(?:[/?#]|$)",
           "active": true
         },
         {
           "type": "regex",
-          "title": "Grok",
-          "pattern": "^https?://(.*\\.)*(grok|grokusercontent|grokipedia)\\.com($|/)",
+          "title": "[AI Proxy:design] Дизайн и совместная работа",
+          "pattern": "^(?:https?|wss?)://(?:(?:[a-z0-9-]+\\.)*(?:adobe\\-identity\\.com|adobe\\-services\\.com|adobe\\.com|adobe\\.io|adobecc\\.com|adobecces\\.com|adobeccstatic\\.com|adobedc\\.net|adobedtm\\.com|adobeexchange\\.com|adobejanus\\.com|adobelogin\\.com|adobeoobe\\.com|adobesc\\.com|adobess\\.com|astockcdn\\.net|behance\\.net|canva\\-apps\\.com|canva\\.ai|canva\\.com|canva\\.link|canvacode\\.com|esm\\.sh|figma\\.app|figma\\.com|figma\\.site|figmaweave\\.com|framer\\.app|framer\\.com|framer\\.website|framerstatic\\.com|framerusercontent\\.com|ftcdn\\.net|jsdelivr\\.net|miro\\-apps\\.com|miro\\.com|mirostatic\\.com|notion\\-static\\.com|notion\\.com|notion\\.site|notion\\.so|notionusercontent\\.com|onlinewhiteboard\\.com|prodregistryv2\\.org|realtimeboard\\.com|typekit\\.com|typekit\\.net|weavy\\.ai|webwhiteboard\\.com)|(?:api\\.stigg\\.io|cc\\-ext\\-prod\\-pkgs\\.s3\\.amazonaws\\.com|pf\\-temp\\-repo\\-ue1\\-prod\\.s3\\.amazonaws\\.com|phonos\\-recordings\\-production\\.s3\\-accelerate\\.amazonaws\\.com|phonos\\-recordings\\-production\\.s3\\.amazonaws\\.com))\\.?(?::[0-9]{1,5})?(?:[/?#]|$)",
           "active": true
         },
         {
           "type": "regex",
-          "title": "X AI",
-          "pattern": "^https?://(.*\\.)*x\\.ai($|/)",
+          "title": "[AI Proxy:publishing] Публикация, видео и сообщества",
+          "pattern": "^(?:https?|wss?)://(?:(?:[a-z0-9-]+\\.)*(?:cdninstagram\\.com|discord\\.com|discord\\.gg|discord\\.media|discordapp\\.com|discordapp\\.net|facebook\\.com|facebook\\.net|fb\\.com|fb\\.me|fbcdn\\.net|fbsbx\\.com|ggpht\\.com|googlevideo\\.com|ig\\.me|instagram\\.com|licdn\\.com|linkedin\\.com|medium\\.com|messenger\\.com|muscdn\\.com|pin\\.it|pinimg\\.com|pinterest\\.com|t\\.co|t\\.me|telegram\\.me|telegram\\.org|telesco\\.pe|threads\\.com|threads\\.net|tiktok\\.com|tiktokcdn\\-eu\\.com|tiktokcdn\\-us\\.com|tiktokcdn\\.com|tiktokv\\.com|tiktokv\\.eu|tiktokw\\.eu|ttwstatic\\.com|twimg\\.com|twitter\\.com|x\\.com|youtu\\.be|youtube\\-nocookie\\.com|youtube\\.com|ytimg\\.com)|(?:youtube\\.googleapis\\.com|youtubei\\.googleapis\\.com))\\.?(?::[0-9]{1,5})?(?:[/?#]|$)",
           "active": true
         },
         {
           "type": "regex",
-          "title": "CloudFlare base",
-          "pattern": "^https?://(.*\\.)*cloudflare\\.com($|/)",
-          "active": true
-        },
-        {
-          "type": "regex",
-          "title": "Cursor",
-          "pattern": "^https?://(.*\\.)*cursor(api)?\\.(sh|com|so)($|/)",
-          "active": true
-        },
-        {
-          "type": "regex",
-          "title": "Microsoft AI",
-          "pattern": "^https?://(.*\\.)*((bing(apis)?|msn|msedge)\\.(com|net)|(copilot|designer|cognitive)\\.microsoft\\.com|(openai|cognitiveservices|ml)\\.azure\\.com|azureml\\.net|microsoft(365|usercontent)?\\.com|office(365)?\\.com|azure(edge)?\\.(com|net)|login\\.(microsoftonline|live)\\.com)($|/)",
-          "active": true
-        },
-        {
-          "type": "regex",
-          "title": "Github|Copilot",
-          "pattern": "^https?://(.*\\.)*github(copilot)?\\.com($|/)",
-          "active": true
-        },
-        {
-          "type": "regex",
-          "title": "DeepL",
-          "pattern": "^https?://(.*\\.)*deepl\\.com($|/)",
-          "active": true
-        },
-        {
-          "type": "regex",
-          "title": "Alibaba Cloud AI",
-          "pattern": "^https?://(.*\\.)*(dashscope\\.aliyuncs\\.com|alibabacloud\\.com)($|/)",
-          "active": true
-        },
-        {
-          "type": "regex",
-          "title": "VSCode CDN",
-          "pattern": "^https?://(.*\\.)*vscode-cdn\\.net($|/)",
-          "active": true
-        },
-        {
-          "type": "regex",
-          "title": "GitHub Copilot Proxy",
-          "pattern": "^https?://copilot-proxy\\.githubusercontent\\.com($|/)",
-          "active": true
-        },
-        {
-          "type": "regex",
-          "title": "AI domains (.ai)",
-          "pattern": "^https?://[^/]*\\.ai($|/)",
+          "title": "[AI Proxy:dependencies] Вход, проверка браузера и файлы",
+          "pattern": "^(?:https?|wss?)://(?:(?:[a-z0-9-]+\\.)*(?:arkoselabs\\.com|awswaf\\.com|googleusercontent\\.com|gstatic\\.com|hcaptcha\\.com|hcaptcha\\.net)|(?:account\\.microsoft\\.com|accounts\\.google\\.com|api\\.stripe\\.com|api\\.workos\\.com|cdn\\.workos\\.com|cdnjs\\.cloudflare\\.com|challenges\\.cloudflare\\.com|checkout\\.stripe\\.com|fonts\\.googleapis\\.com|fonts\\.intercomcdn\\.com|forwarder\\.workos\\.com|frontend\\-apps\\-multi\\-region\\.workos\\.com|images\\.workoscdn\\.com|js\\.intercomcdn\\.com|js\\.stripe\\.com|login\\.live\\.com|login\\.microsoftonline\\.com|oauth2\\.googleapis\\.com|setup\\.workos\\.com|workos\\.imgix\\.net|www\\.googleapis\\.com))\\.?(?::[0-9]{1,5})?(?:[/?#]|$)",
           "active": true
         }
       ],

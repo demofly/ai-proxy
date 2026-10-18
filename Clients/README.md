@@ -39,26 +39,21 @@ Clients/
 
 Файл [`FoxyProxy/FoxyProxy.json`](FoxyProxy/FoxyProxy.json) содержит конфигурацию для браузерного расширения [FoxyProxy](https://getfoxyproxy.org/).
 
-Конфигурация настраивает проксирование только для AI-сервисов:
-- **Gemini** — gemini.google.com, aistudio.google.com, googleapis.com
-- **ChatGPT** — chatgpt.com, openai.com
-- **Claude** — claude.ai, anthropic.com
-- **Grok** — grok.com
-- **X AI** — x.ai
-- **DeepL** — deepl.com
-- **Alibaba Cloud AI** — dashscope.aliyuncs.com, alibabacloud.com
-- **Microsoft AI** — bing.com, copilot.microsoft.com, azure OpenAI и др.
-- **Cursor** — cursor.sh, cursor.com
-- **GitHub Copilot** — github.com, githubcopilot.com, copilot-proxy.githubusercontent.com
-- **CloudFlare** — cloudflare.com
-- **VSCode CDN** — vscode-cdn.net
-- **Все домены зоны .ai**
+Конфигурация включает режим **по шаблонам** и правила для AI-ассистентов,
+генерации изображений, видео и звука, GitHub/Copilot, Cursor, Figma, Canva,
+Adobe, Notion, Miro и публикации контента. YouTube, Discord, X, Instagram,
+Facebook, TikTok, Pinterest и LinkedIn включены вместе с медиа-CDN.
+
+Состав сервисов, источники доменов, обновление правил без замены реквизитов
+и ограничения браузерного прокси описаны в [FoxyProxy/README.md](FoxyProxy/README.md).
+Домены перечислены явно: вся зона `.ai`, Google, AWS и Cloudflare целиком
+через прокси не направляются.
 
 ### Импорт конфигурации
 
 1. Установите расширение FoxyProxy для вашего браузера
 2. Отредактируйте файл `FoxyProxy.json`, заменив:
-   - `ai-proxy.example.com` — на адрес корпоративного прокси-сервера
+   - `proxy.example.com` — на адрес корпоративного прокси-сервера
    - `USERNAME` и `PASSWORD` — на ваши учетные данные
 3. Откройте настройки расширения
 4. Перейдите в раздел **Import** → **Import from URL or file**
