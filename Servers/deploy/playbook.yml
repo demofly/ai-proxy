@@ -58,11 +58,11 @@
     # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
-    # Старые inventory тоже получают шифрование: значение в образце само по себе
-    # не меняет рабочую конфигурацию. Явное false остаётся выбором владельца.
+    # Отсутствие флага сохраняет прежний транспорт. TLS включается явно
+    # и требует согласованного развёртывания upstream перед access.
     - name: "Определить параметры TLS-участка с учётом inventory"
       ansible.builtin.set_fact:
-        squid_transit_tls: '{{ squid_transit_tls | default(true) | bool }}'
+        squid_transit_tls: '{{ squid_transit_tls | default(false) | bool }}'
         squid_tls_sni: '{{ squid_tls_sni | default("transit.internal") }}'
       tags: [always]
 
@@ -576,6 +576,26 @@
       run_once: true
       when: squid_transit_tls | default(false) | bool
 
+    # Файл мог остаться от запуска с другим SNI. Проверяем доверенный якорь
+    # до его раздачи: creates у выпуска сертификата не обновляет старый SAN.
+    - name: "Проверить имя и срок действия сертификата TLS-участка"
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - verify
+          - -CAfile
+          - "{{ playbook_dir }}/tls/squid-transit.crt"
+          - -verify_hostname
+          - "{{ squid_tls_sni }}"
+          - "{{ playbook_dir }}/tls/squid-transit.crt"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      run_once: true
+      when:
+        - squid_transit_tls | bool
+        - not ansible_check_mode
+
     - name: "Проверить наличие и свойства локального файла паролей"
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/passwd"
@@ -723,10 +743,35 @@
     # времени — при паре access-нод под VIP хотя бы одна остаётся рабочей.
     - name: "Установить Squid"
       ansible.builtin.package:
-        name: squid
+        # GnuTLS в Squid 6.14 принимает tls-domain, но не отправляет SNI.
+        # Уже установленный OpenSSL сохраняется и после отключения TLS.
+        name: >-
+          {{ 'squid-openssl' if ansible_os_family == 'Debian' and
+             (squid_transit_tls | bool or '--with-openssl' in (_squid_version_raw.stdout | default('')))
+             else 'squid' }}
         state: "{{ pkg_state }}"
       register: squid_installed
       throttle: 1
+
+    - name: "Проверить сборку Squid для TLS-участка"
+      ansible.builtin.command: squid -v
+      register: _squid_tls_build
+      changed_when: false
+      check_mode: false
+      when: squid_transit_tls | bool
+
+    - name: "Проверить поддержку SNI в сборке Squid"
+      ansible.builtin.assert:
+        that:
+          - "'--with-openssl' in (_squid_tls_build.stdout | default(''))"
+        fail_msg: >-
+          TLS-участок требует сборку Squid с OpenSSL: GnuTLS в Squid 6.14
+          не отправляет SNI, необходимый маршрутизатору upstream. На Debian/Ubuntu
+          плейбук выбирает squid-openssl. На других системах установите сборку
+          с --with-openssl до включения squid_transit_tls.
+      when:
+        - squid_transit_tls | bool
+        - not ansible_check_mode
 
     # Fresh install: apt auto-starts Squid with default config.
     # Stop it — we deploy full config first, then start with correct config.

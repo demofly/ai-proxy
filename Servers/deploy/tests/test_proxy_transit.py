@@ -20,6 +20,8 @@ class ProxyTransitTests(unittest.TestCase):
                         if 'squid_transit_tls' in task.get('ansible.builtin.set_fact', {}))
         validation = next(task for task in source['pre_tasks']
                           if task['name'] == 'Проверить наличие имени TLS-участка')
+        package = next(task['ansible.builtin.package']['name'] for task in source['tasks']
+                       if task['name'] == 'Установить Squid')
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
             inventory = {'all': {'hosts': {'localhost': {'ansible_connection': 'local'}},
@@ -30,9 +32,12 @@ class ProxyTransitTests(unittest.TestCase):
                                         'mtproxy_enabled': True}}}}}}
             (tmp / 'inventory.yml').write_text(yaml.safe_dump(inventory), encoding='utf-8')
             values = dict(enable_caching=False, enable_logging=False, enable_auth=True,
-                          nginx_on_443=True, squid_port=443, squid_workers=1)
+                          nginx_on_443=True, squid_port=443, squid_workers=1,
+                          ansible_os_family='Debian', _squid_version_raw={'stdout': '--with-gnutls'})
             values.update(overrides or {})
             tasks = copy.deepcopy([defaults, validation])
+            tasks.append({'name': 'Определить пакет Squid по настройкам участка', 'ansible.builtin.copy': {
+                'content': package, 'dest': str(tmp / 'package.conf')}})
             for name, template, conditional in (
                 ('access', 'templates/squid-access.conf.j2', False),
                 ('upstream', 'templates/squid-upstream.conf.j2', False),
@@ -60,6 +65,7 @@ class ProxyTransitTests(unittest.TestCase):
             return {p.stem: p.read_text(encoding='utf-8') for p in tmp.glob('*.conf')}
 
     def assert_encrypted(self, rendered, name):
+        self.assertEqual(rendered['package'].strip(), 'squid-openssl')
         peer = next(line for line in rendered['access'].splitlines() if line.startswith('cache_peer '))
         self.assertIn(' tls tls-no-default-ca tls-cafile=', peer)
         self.assertIn(' tls-domain=' + name, peer)
@@ -68,22 +74,35 @@ class ProxyTransitTests(unittest.TestCase):
         self.assertIn('proxy_protocol on;', rendered['terminator'])
         self.assertNotIn('\n    set_real_ip_from ', rendered['terminator'])
 
-    def test_legacy_inventory_encrypts_and_preserves_anonymous_peer(self):
-        self.assert_encrypted(self.render(), 'transit.internal')
+    def test_explicit_true_encrypts_and_preserves_anonymous_peer(self):
+        self.assert_encrypted(self.render({'squid_transit_tls': True}), 'transit.internal')
 
     def test_custom_transit_name_is_used_for_verification_and_routing(self):
-        self.assert_encrypted(self.render({'squid_tls_sni': 'proxy-transit.test'}), 'proxy-transit.test')
+        self.assert_encrypted(self.render({'squid_transit_tls': True, 'squid_tls_sni': 'proxy-transit.test'}), 'proxy-transit.test')
 
-    def test_explicit_false_keeps_plain_transport(self):
-        rendered = self.render({'squid_transit_tls': False})
+    def assert_plain(self, rendered):
         peer = next(line for line in rendered['access'].splitlines() if line.startswith('cache_peer '))
         self.assertNotIn(' tls ', peer)
         self.assertNotIn('acl access_proxy src 127.0.0.1/32', rendered['upstream'])
         self.assertNotIn('terminator', rendered)
         self.assertNotIn('sni', rendered)
 
+    def test_legacy_inventory_keeps_plain_transport(self):
+        rendered = self.render()
+        self.assert_plain(rendered)
+        self.assertEqual(rendered['package'].strip(), 'squid')
+
+    def test_explicit_false_keeps_plain_transport(self):
+        self.assert_plain(self.render({'squid_transit_tls': False}))
+
+    def test_disabling_tls_preserves_installed_openssl_package(self):
+        rendered = self.render({'squid_transit_tls': False,
+                                '_squid_version_raw': {'stdout': '--with-openssl'}})
+        self.assert_plain(rendered)
+        self.assertEqual(rendered['package'].strip(), 'squid-openssl')
+
     def test_empty_name_fails_before_rendering_configuration(self):
-        self.render({'squid_tls_sni': ''}, rejected=True)
+        self.render({'squid_transit_tls': True, 'squid_tls_sni': ''}, rejected=True)
 
 
 if __name__ == '__main__':
