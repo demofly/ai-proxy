@@ -274,7 +274,7 @@ LEAK_ALLOWED = {
 LEAK_ALLOWED_PREFIXES = ("192.0.2.", "198.51.100.", "203.0.113.", "10.", "172.16.", "192.168.")
 
 
-EXAMPLE_INVENTORY = os.path.join(REPO, "Servers", "deploy", "inventory.example.yml")
+EXAMPLE_INVENTORY = os.path.join(REPO, "Servers", "deploy", "inventory.yml.sample")
 
 
 def collect_example_values():

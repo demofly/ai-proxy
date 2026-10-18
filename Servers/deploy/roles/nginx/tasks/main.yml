@@ -41,7 +41,7 @@
 #   — `throttle: 1` разводит обновление по узлам, и одновременного разрыва
 #     на паре access-нод под общим VIP не возникает.
 # Заморозить версию на узле совместного размещения: service_upgrades_enabled=false
-# в inventory (см. inventory.example.yml).
+# в inventory (см. inventory.yml.sample).
 - name: Install nginx with stream module support
   ansible.builtin.apt:
     name:

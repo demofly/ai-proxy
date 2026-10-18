@@ -32,7 +32,7 @@ flowchart TD
 в них действительные адреса и реквизиты доступа. Оба исключены из контроля версий.
 
 ```bash
-cp inventory.example.yml inventory.yml
+cp inventory.yml.sample inventory.yml
 cp passwd.example passwd
 ```
 

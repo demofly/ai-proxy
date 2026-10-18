@@ -7,7 +7,7 @@
 
 ```
 deploy/
-├── inventory.example.yml        # Образец инвентаря (отслеживается)
+├── inventory.yml.sample        # Образец инвентаря (отслеживается)
 ├── inventory.yml                # Рабочий инвентарь — НЕ отслеживается (.gitignore)
 ├── playbook.yml                 # Основной playbook
 ├── passwd.example               # Образец файла пользователей (отслеживается)
@@ -227,7 +227,9 @@ Squid/DNS и CrowdSec. nftables template включает сохранённый
 Неактивный UFW не считается применением портового контракта.
 
 Проверка helper: `python -m unittest discover -s Servers/deploy/tests -p 'test_*.py'`.
-Проверка синтаксиса: `ansible-playbook -i inventory.example.yml playbook.yml --syntax-check`.
+Проверка синтаксиса после копирования образца в рабочий `inventory.yml`: `ansible-playbook -i inventory.yml playbook.yml --syntax-check`.
+
+`inventory.yml.sample` содержит примеры всех поддерживаемых параметров и пояснения к каждому. Закомментированные переопределения сохраняют автоматический расчёт. Расширение `.sample` предназначено для образца: штатный YAML inventory plugin Ansible ожидает `.yml`, `.yaml` или `.json`, поэтому перед запуском скопируйте файл в `inventory.yml`.
 
 ## Шифрование участка access → upstream
 
@@ -273,7 +275,7 @@ access без доверенного материала при прогоне, �
 0. Создайте рабочие файлы из образцов (оба исключены из контроля версий: они содержат
    действительные адреса и реквизиты доступа и раскрытию не подлежат):
    ```bash
-   cp inventory.example.yml inventory.yml
+   cp inventory.yml.sample inventory.yml
    cp passwd.example passwd        # затем наполнить: htpasswd -B -C 12 -bn user pass >> passwd
    ```
 
@@ -406,7 +408,7 @@ Playbook выполняет фазы в строгом порядке:
 2. **Бюджет памяти** — пределы служб от объёма RAM и проверка выполнимости плана.
    Не помещается — развёртывание **останавливается** здесь, до внесения изменений на узел
 3. **DNS resolver** — unbound на каждой ноде
-4. **Install Squid** — пакет, systemd override, директории
+4. **Установить Squid** — пакет, systemd override, директории
 5. **nginx/MTProxy** — **до** конфигурации Squid, чтобы освободить порты:
    - upstream: mtproxy role устанавливает nginx на :443, удаляет default site с :80
    - access: nginx role устанавливает nginx на :443, переконфигурирует Squid на :3128

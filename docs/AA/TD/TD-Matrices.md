@@ -221,7 +221,7 @@ access-узлам, выпускается ими же, а не ролью рез
 | Белый список доменов | [DE-DM-001](../DD/DE/DE-DM-001.md) | Файловая система (access-узел) | Директивы `acl … dstdomain` и `dstdom_regex` внутри конфигурации Squid | `/etc/squid/squid.conf` |
 | Записи журнала доступа | [DE-LG-001](../DD/DE/DE-LG-001.md) | Файловая система (access-узел) | Текстовый журнал заданного формата | `/var/log/squid/access.log` |
 | Списки управления доступом | [DE-AC-001](../DD/DE/DE-AC-001.md) | Файловая система + правила ядра (upstream-узел) | Правила выбранного бэкенда экрана и директивы `access-control` резолвера | `/etc/nftables.conf` либо `/etc/iptables/aiproxy-upstream.rules` либо правила UFW; `/etc/unbound/unbound.conf` |
-| Параметры конфигурации | [DE-CF-001](../DD/DE/DE-CF-001.md) | Файловая система (все узлы) | YAML на стороне управления, порождённые конфигурации на узлах | `inventory.yml` (вне контроля версий, образец — `inventory.example.yml`); `/etc/nginx/stream.d/`, `/etc/keepalived/keepalived.conf`, `/etc/unbound/unbound.conf` |
+| Параметры конфигурации | [DE-CF-001](../DD/DE/DE-CF-001.md) | Файловая система (все узлы) | YAML на стороне управления, порождённые конфигурации на узлах | `inventory.yml` (вне контроля версий, образец — `inventory.yml.sample`); `/etc/nginx/stream.d/`, `/etc/keepalived/keepalived.conf`, `/etc/unbound/unbound.conf` |
 | Секреты | [DE-SC-001](../DD/DE/DE-SC-001.md) | Файловая система (upstream- и access-узлы) | Шестнадцатеричная строка секрета mtg, пароль VRRP | `/etc/mtproxy/mtg.toml` (0640), `/etc/keepalived/keepalived.conf` |
 
 | Транзитный поток | [DE-TR-001](../DD/DE/DE-TR-001.md) | Не хранится | Поток TCP; после установления туннеля — шифрованные записи TLS | Память рабочих процессов Squid |

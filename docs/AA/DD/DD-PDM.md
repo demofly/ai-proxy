@@ -141,7 +141,7 @@ table inet filter {
 |---|---|
 | **LDM-сущность** | Config Parameter, Secret |
 | **DE** | [DE-CF-001](DE/DE-CF-001.md), [DE-SC-001](DE/DE-SC-001.md) |
-| **Путь** | `Servers/deploy/inventory.yml` (в рабочем каталоге, вне контроля версий; в репозитории — образец `inventory.example.yml`) |
+| **Путь** | `Servers/deploy/inventory.yml` (в рабочем каталоге, вне контроля версий; в репозитории — образец `inventory.yml.sample`) |
 | **Формат** | YAML |
 | **Кодировка** | UTF-8 |
 | **Права** | Файловая система рабочего каталога; в контроль версий не попадает (содержит адреса узлов и секреты) |
