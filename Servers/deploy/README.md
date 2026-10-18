@@ -247,6 +247,11 @@ squid_transit_tls: true
 squid_tls_sni: "transit.internal"   # опознавательное имя, в DNS разрешаться не обязано
 ```
 
+Эти значения теперь действуют и при отсутствии параметров в старом inventory.
+Явное `squid_transit_tls: false` сохраняется. Имя проверяется до выпуска сертификата.
+Изменение требует согласованного применения на access и upstream; обновление одного
+лишь образца inventory не меняет уже запущенные службы.
+
 **Материал.** Самоподписанный сертификат выпускается развёртыванием на управляющей
 машине в `deploy/tls/` (каталог исключён из контроля версий — в нём закрытый ключ)
 и раздаётся обеим сторонам: принимающей — сертификат и ключ, обращающейся — только
@@ -548,10 +553,10 @@ Access nodes ──┤            │     ├─ SNI=max.ru / <mtproxy_hostname,
 
 **Ключевые характеристики:**
 - **Единый порт на upstream**: nginx :443 — и MTProxy по SNI, и цепочка Squid по умолчанию
-- **Plain HTTP cache_peer**: access Squid → upstream `squid_port` без TLS (ветка с `tls`/`tls-domain` включается только при заданной `squid_tls_sni`, в образце инвентаря она не задана)
+- **TLS cache_peer по умолчанию**: access Squid → upstream с проверкой сертификата и SNI `transit.internal`. Явный `squid_transit_tls: false` оставляет незашифрованный CONNECT.
 - **PROXY protocol**: nginx на access пробрасывает реальный IP клиента к локальному Squid
 - **TCP keepalive**: `proxy_socket_keepalive on` для обнаружения мёртвых соединений
-- **Дифференцированные таймауты**: Squid chain — 1800s (30 мин, AI API); MTProxy chain — 60s
+- **Таймауты**: router и терминатор Squid — не менее 3900s, выше `read_timeout` Squid; MTProxy-реле — 360s, выше 300s простоя mtg
 
 ### Upstream прокси (Squid cache_peer)
 

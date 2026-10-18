@@ -1,0 +1,90 @@
+"""Render the real transport configuration with native Ansible and legacy inventory."""
+import copy
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@unittest.skipUnless(shutil.which('ansible-playbook'), 'requires ansible-playbook')
+class ProxyTransitTests(unittest.TestCase):
+    def render(self, overrides=None, rejected=False):
+        source = yaml.safe_load((ROOT / 'playbook.yml').read_text(encoding='utf-8'))[0]
+        defaults = next(task for task in source['pre_tasks']
+                        if 'squid_transit_tls' in task.get('ansible.builtin.set_fact', {}))
+        validation = next(task for task in source['pre_tasks']
+                          if task['name'] == 'Проверить наличие имени TLS-участка')
+        with tempfile.TemporaryDirectory() as directory:
+            tmp = Path(directory)
+            inventory = {'all': {'hosts': {'localhost': {'ansible_connection': 'local'}},
+                                'children': {
+                                    'access_proxies': {'hosts': {'access-test': {'ansible_host': '192.0.2.10'}}},
+                                    'upstreams': {'hosts': {'upstream-test': {
+                                        'ansible_host': '198.51.100.20', 'squid_port': 443,
+                                        'mtproxy_enabled': True}}}}}}
+            (tmp / 'inventory.yml').write_text(yaml.safe_dump(inventory), encoding='utf-8')
+            values = dict(enable_caching=False, enable_logging=False, enable_auth=True,
+                          nginx_on_443=True, squid_port=443, squid_workers=1)
+            values.update(overrides or {})
+            tasks = copy.deepcopy([defaults, validation])
+            for name, template, conditional in (
+                ('access', 'templates/squid-access.conf.j2', False),
+                ('upstream', 'templates/squid-upstream.conf.j2', False),
+                ('terminator', 'roles/mtproxy/templates/nginx-squid-tls-term.conf.j2', True),
+                ('sni', 'roles/mtproxy/templates/sni-map.d/squid.conf.j2', True),
+            ):
+                task = {'name': 'Render ' + name, 'ansible.builtin.template': {
+                    'src': str(ROOT / template), 'dest': str(tmp / (name + '.conf'))}}
+                if conditional:
+                    task['when'] = 'squid_transit_tls | bool'
+                tasks.append(task)
+            play = [{'name': 'Transport regression', 'hosts': 'localhost', 'gather_facts': False,
+                     'become': False, 'vars': values, 'tasks': tasks}]
+            (tmp / 'test.yml').write_text(yaml.safe_dump(play, allow_unicode=True), encoding='utf-8')
+            env = dict(os.environ, ANSIBLE_FILTER_PLUGINS=str(ROOT / 'filter_plugins'),
+                       ANSIBLE_STDOUT_CALLBACK='default', ANSIBLE_NOCOLOR='1')
+            result = subprocess.run(['ansible-playbook', '-i', str(tmp / 'inventory.yml'), str(tmp / 'test.yml')],
+                                    env=env, capture_output=True, text=True, timeout=60)
+            if rejected:
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('Шифрование участка включено', result.stdout)
+                self.assertFalse(list(tmp.glob('*.conf')))
+                return None
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return {p.stem: p.read_text(encoding='utf-8') for p in tmp.glob('*.conf')}
+
+    def assert_encrypted(self, rendered, name):
+        peer = next(line for line in rendered['access'].splitlines() if line.startswith('cache_peer '))
+        self.assertIn(' tls tls-no-default-ca tls-cafile=', peer)
+        self.assertIn(' tls-domain=' + name, peer)
+        self.assertIn('acl access_proxy src 127.0.0.1/32', rendered['upstream'])
+        self.assertIn(name + '  squid_tls_term;', rendered['sni'])
+        self.assertIn('proxy_protocol on;', rendered['terminator'])
+        self.assertNotIn('\n    set_real_ip_from ', rendered['terminator'])
+
+    def test_legacy_inventory_encrypts_and_preserves_anonymous_peer(self):
+        self.assert_encrypted(self.render(), 'transit.internal')
+
+    def test_custom_transit_name_is_used_for_verification_and_routing(self):
+        self.assert_encrypted(self.render({'squid_tls_sni': 'proxy-transit.test'}), 'proxy-transit.test')
+
+    def test_explicit_false_keeps_plain_transport(self):
+        rendered = self.render({'squid_transit_tls': False})
+        peer = next(line for line in rendered['access'].splitlines() if line.startswith('cache_peer '))
+        self.assertNotIn(' tls ', peer)
+        self.assertNotIn('acl access_proxy src 127.0.0.1/32', rendered['upstream'])
+        self.assertNotIn('terminator', rendered)
+        self.assertNotIn('sni', rendered)
+
+    def test_empty_name_fails_before_rendering_configuration(self):
+        self.render({'squid_tls_sni': ''}, rejected=True)
+
+
+if __name__ == '__main__':
+    unittest.main()

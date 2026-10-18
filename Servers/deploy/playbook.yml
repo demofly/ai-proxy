@@ -58,6 +58,32 @@
     # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
+    # Старые inventory тоже получают шифрование: значение в образце само по себе
+    # не меняет рабочую конфигурацию. Явное false остаётся выбором владельца.
+    - name: "Определить параметры TLS-участка с учётом inventory"
+      ansible.builtin.set_fact:
+        squid_transit_tls: '{{ squid_transit_tls | default(true) | bool }}'
+        squid_tls_sni: '{{ squid_tls_sni | default("transit.internal") }}'
+      tags: [always]
+
+    # Проверка непустоты имени: пустое дало бы сертификат без имени и молчаливый
+    # отказ проверки подлинности на стороне access — то есть неработающий участок
+    # при внешне успешном развёртывании.
+    - name: "Проверить наличие имени TLS-участка"
+      ansible.builtin.assert:
+        that:
+          - squid_tls_sni is defined
+          - squid_tls_sni | default('') | length > 0
+        fail_msg: >-
+          Шифрование участка включено (squid_transit_tls), но имя squid_tls_sni не задано.
+          По этому имени access объявляет SNI и проверяет подлинность принимающей стороны,
+          а маршрутизатор upstream направляет соединение к терминатору. Имя не обязано
+          разрешаться в DNS — оно опознавательное, не адресное; годится, например,
+          transit.internal. Задайте его в инвентори рядом с прочими переменными участка.
+        success_msg: "Имя участка задано: {{ squid_tls_sni | default('') }}."
+      when: squid_transit_tls | bool
+      tags: [always]
+
     - name: "Определить домен fake-TLS MTProxy с учётом inventory"
       ansible.builtin.set_fact:
         mtproxy_fake_tls_domain: '{{ mtproxy_fake_tls_domain | default("max.ru") }}'
@@ -548,23 +574,6 @@
       delegate_to: localhost
       become: false
       run_once: true
-      when: squid_transit_tls | default(false) | bool
-
-    # Проверка непустоты имени: пустое дало бы сертификат без имени и молчаливый
-    # отказ проверки подлинности на стороне access — то есть неработающий участок
-    # при внешне успешном развёртывании.
-    - name: "Проверить наличие имени TLS-участка"
-      ansible.builtin.assert:
-        that:
-          - squid_tls_sni is defined
-          - squid_tls_sni | default('') | length > 0
-        fail_msg: >-
-          Шифрование участка включено (squid_transit_tls), но имя squid_tls_sni не задано.
-          По этому имени access объявляет SNI и проверяет подлинность принимающей стороны,
-          а маршрутизатор upstream направляет соединение к терминатору. Имя не обязано
-          разрешаться в DNS — оно опознавательное, не адресное; годится, например,
-          transit.internal. Задайте его в инвентори рядом с прочими переменными участка.
-        success_msg: "Имя участка задано: {{ squid_tls_sni | default('') }}."
       when: squid_transit_tls | default(false) | bool
 
     - name: "Проверить наличие и свойства локального файла паролей"
