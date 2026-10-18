@@ -1,0 +1,151 @@
+---
+- name: "Установить средства проверки HTTPS-сертификата"
+  ansible.builtin.apt:
+    name: [openssl, ca-certificates]
+    state: present
+  when: https_proxy_enabled | default(false) | bool
+
+- name: "Проверить существующие имена SNI перед настройкой HTTPS-прокси"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import pathlib, sys
+        name = sys.argv[1].lower()
+        count = 0
+        for path in pathlib.Path('/etc/nginx/stream.d/sni-map.d').glob('*.conf'):
+            if path.name == 'aiproxy-https-proxy.conf':
+                continue
+            for line in path.read_text().splitlines():
+                words = line.split()
+                if words and words[0].strip('"').lower() == name:
+                    count += 1
+        print(count)
+      - "{{ https_proxy_hostname }}"
+  register: _https_proxy_sni_conflicts
+  changed_when: false
+  when: https_proxy_enabled | default(false) | bool
+
+- name: "Исключить занятие HTTPS-прокси чужого имени SNI"
+  ansible.builtin.assert:
+    that: _https_proxy_sni_conflicts.stdout | int == 0
+    fail_msg: "Имя https_proxy_hostname уже занято другим SNI-фрагментом; выберите отдельное DNS-имя."
+    success_msg: "Имя HTTPS-прокси не занято другими SNI-фрагментами."
+  when: https_proxy_enabled | default(false) | bool
+
+- name: "Подключить выпуск сертификата клиентского HTTPS-прокси"
+  ansible.builtin.include_tasks: https-proxy-certificate.yml
+  when:
+    - https_proxy_enabled | default(false) | bool
+    - https_proxy_acme_enabled | default(false) | bool
+
+- name: "Проверить сертификат HTTPS-прокси и его имя"
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - verify
+      - -untrusted
+      - "{{ https_proxy_certificate | default('/etc/letsencrypt/live/' ~ https_proxy_hostname ~ '/fullchain.pem') }}"
+      - -verify_hostname
+      - "{{ https_proxy_hostname }}"
+      - "{{ https_proxy_certificate | default('/etc/letsencrypt/live/' ~ https_proxy_hostname ~ '/fullchain.pem') }}"
+  changed_when: false
+  when: https_proxy_enabled | default(false) | bool
+
+- name: "Удалить HTTP-сайт ACME при выключении его сопровождения"
+  ansible.builtin.file:
+    path: /etc/nginx/conf.d/aiproxy-https-acme.conf
+    state: absent
+  when: not (https_proxy_enabled | default(false) | bool and https_proxy_acme_enabled | default(false) | bool)
+  notify: "Перечитать конфигурацию nginx"
+
+- name: "Сохранить прежние фрагменты HTTPS-прокси для отката"
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop:
+    - /etc/nginx/stream.d/11-aiproxy-https-proxy.conf
+    - /etc/nginx/stream.d/sni-map.d/aiproxy-https-proxy.conf
+  register: _https_proxy_previous
+  failed_when: false
+
+- name: "Проверить занятость локального порта HTTPS-прокси"
+  ansible.builtin.command:
+    argv: [ss, -H, -ltnp, "sport = :{{ https_proxy_local_port | default(4445) | int }}"]
+  changed_when: false
+  register: _https_proxy_port
+  no_log: true
+  when: https_proxy_enabled | default(false) | bool
+
+- name: "Исключить конфликт локального порта HTTPS-прокси"
+  ansible.builtin.assert:
+    that:
+      - >-
+        _https_proxy_port.stdout | trim | length == 0 or
+        (_https_proxy_previous.results[0].content is defined and
+         ('listen 127.0.0.1:' ~ (https_proxy_local_port | default(4445) | int | string) ~ ' ssl proxy_protocol;')
+           in (_https_proxy_previous.results[0].content | b64decode) and
+         _https_proxy_port.stdout_lines | reject('search', '"nginx"') | list | length == 0)
+    fail_msg: "Локальный порт HTTPS-прокси занят другой конфигурацией; задайте свободный https_proxy_local_port."
+    success_msg: "Локальный порт HTTPS-прокси свободен или уже принадлежит его терминатору."
+  when: https_proxy_enabled | default(false) | bool
+
+- name: "Настроить HTTPS-прокси с проверкой и откатом"
+  block:
+    - name: "Разместить TLS-терминатор и имя HTTPS-прокси"
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - src: 11-aiproxy-https-proxy.conf.j2
+          dest: /etc/nginx/stream.d/11-aiproxy-https-proxy.conf
+        - src: sni-map.d/aiproxy-https-proxy.conf.j2
+          dest: /etc/nginx/stream.d/sni-map.d/aiproxy-https-proxy.conf
+      when: https_proxy_enabled | default(false) | bool
+      notify: "Перечитать конфигурацию nginx"
+
+    - name: "Удалить фрагменты выключенного HTTPS-прокси"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/nginx/stream.d/11-aiproxy-https-proxy.conf
+        - /etc/nginx/stream.d/sni-map.d/aiproxy-https-proxy.conf
+      when: not (https_proxy_enabled | default(false) | bool)
+      notify: "Перечитать конфигурацию nginx"
+
+    - name: "Проверить общий nginx после настройки HTTPS-прокси"
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+  rescue:
+    - name: "Восстановить прежние фрагменты HTTPS-прокси"
+      ansible.builtin.copy:
+        content: "{{ item.content | b64decode }}"
+        dest: "{{ item.item }}"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ _https_proxy_previous.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.content is defined
+
+    - name: "Удалить новые фрагменты HTTPS-прокси при откате"
+      ansible.builtin.file:
+        path: "{{ item.item }}"
+        state: absent
+      loop: "{{ _https_proxy_previous.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.content is not defined
+
+    - name: "Остановить развёртывание после отката HTTPS-прокси"
+      ansible.builtin.fail:
+        msg: >-
+          HTTPS-прокси не прошёл nginx -t. Его фрагменты восстановлены;
+          работающий nginx не перечитывал ошибочную конфигурацию.
+          Проверьте сертификат, ключ, имя SNI и конфликт с другими SNI-правилами.

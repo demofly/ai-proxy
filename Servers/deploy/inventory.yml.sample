@@ -16,6 +16,27 @@ all:
           # Необязательный пул Squid для этого access; по умолчанию вся группа upstreams.
           # Позволяет исключить неисправную связь; нужны существующие имена без повторов.
           # squid_upstream_hosts: [upstream-01, upstream-02]
+          # Зашифрованный клиентский вход через SNI на общем 443; по умолчанию false.
+          # Включайте на узле, на который указывают все A/AAAA выбранного имени.
+          # https_proxy_enabled: true
+          # Отдельное публичное DNS-имя; не должно совпадать с Matrix/MTProxy/transit.
+          # https_proxy_hostname: proxy.example.com
+          # Сертификат с полной цепочкой, уже существующий на сервере.
+          # Без переопределения: /etc/letsencrypt/live/<https_proxy_hostname>/fullchain.pem.
+          # https_proxy_certificate: /etc/ssl/proxy/fullchain.pem
+          # Соответствующий закрытый ключ на сервере; права 0600, не файл контроллера.
+          # Без переопределения: /etc/letsencrypt/live/<https_proxy_hostname>/privkey.pem.
+          # https_proxy_certificate_key: /etc/ssl/private/proxy.key
+          # Свободный loopback-порт TLS-терминатора; наружу не открывается (умолчание 4445).
+          # https_proxy_local_port: 4445
+          # Выпуск/продление Certbot HTTP-01, по умолчанию false; требует доступного 80.
+          # Использует стандартные пути Let’s Encrypt; custom certificate/key не задавайте.
+          # https_proxy_acme_enabled: true
+          # Контакт ACME-аккаунта, обязателен при автоматическом выпуске сертификата.
+          # https_proxy_acme_email: admin@example.com
+          # Каталог HTTP-01; именной vhost и deploy-hook принадлежат ai-proxy.
+          # Не меняет default_server или сайты соседей; умолчание /var/www/certbot.
+          # https_proxy_acme_webroot: /var/www/certbot
           # Адрес SSH; также источник адреса узла для ACL и межузлового трафика.
           ansible_host: 203.0.113.1
           # Начальное состояние VRRP; действует при enable_keepalived: true.

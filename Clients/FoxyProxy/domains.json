@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "reviewed": "2026-10-18",
-  "policy": "Preserve user rules; require registry evidence for additions.",
+  "reviewed": "2026-10-19",
+  "policy": "Preserve user rules and explicitly requested services; require registry evidence for other additions.",
   "registry": {
     "repository": "https://github.com/zapret-info/z-i",
     "commit": "9133e4327bbcf9adc1cba24360f50e50a6b4d11c",
@@ -350,6 +350,18 @@
             "fb.com",
             "fb.me",
             "messenger.com"
+          ]
+        },
+        {
+          "name": "X",
+          "basis": "user",
+          "sources": [
+            "https://x.com/"
+          ],
+          "domains": [
+            "x.com",
+            "twimg.com",
+            "t.co"
           ]
         },
         {

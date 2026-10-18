@@ -315,6 +315,76 @@ AIPROXY_TEST_SQUID=/usr/sbin/squid python3 -m unittest discover -s tests -p test
 `nobody` с группой `nogroup`. Это проверка одного участка, не нагрузочный тест
 и не проверка всей цепочки nginx или доступа к Facebook в рабочей сети.
 
+## HTTPS-прокси для клиентов
+
+`squid_transit_tls` защищает только access → upstream. Для шифрования
+Windows/Firefox → access включите отдельный HTTPS-вход на том же публичном 443:
+
+```yaml
+# Параметры одного узла в access_proxies.hosts; имя должно вести только на него.
+https_proxy_enabled: true
+https_proxy_hostname: proxy.example.com
+https_proxy_acme_enabled: true
+https_proxy_acme_email: admin@example.com
+```
+
+Все A/AAAA этого имени должны указывать на выбранный access. Для HTTP-01 нужен
+доступный порт 80. Certbot использует отдельный именной HTTP-сайт в
+`/etc/nginx/conf.d/aiproxy-https-acme.conf`, webroot `/var/www/certbot` и стандартные
+пути `/etc/letsencrypt/live/<имя>/`. Default HTTP-сайты соседних проектов сохраняются.
+Таймер Certbot продлевает сертификат, собственный deploy-hook проверяет nginx
+и выполняет reload. При нескольких адресах одного имени ACME-проверки нужно
+обслуживать на всех адресах; данный режим рассчитан на имя одного узла.
+
+Для сертификата, сопровождаемого вне проекта, оставьте
+`https_proxy_acme_enabled: false` и задайте `https_proxy_certificate` (полная цепочка)
+и `https_proxy_certificate_key` (ключ на сервере). Без переопределения используются
+стандартные пути Let’s Encrypt. Имя и публичная цепочка проверяются OpenSSL;
+ключ и вся конфигурация — `nginx -t`. Самоподписанный сертификат клиентского входа
+не поддерживается. Нужен nginx с stream SSL, realip и ALPN (nginx ≥ 1.21.4).
+
+Примените полный плейбук. В FoxyProxy выберите **HTTPS**, имя из
+`https_proxy_hostname`, порт **443** и прежние логин/пароль. Тип HTTP на порту 443
+не шифрует первый участок. Поддержка такого типа есть в
+[Firefox ProxyInfo](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/proxy/ProxyInfo).
+Проверить полную загрузку можно curl со сборкой, поддерживающей HTTPS-прокси:
+
+```sh
+# curl запросит пароль; сертификаты прокси и сайта проверяются штатно.
+curl --proxy https://proxy.example.com:443 --proxy-user USER --noproxy '' \
+  --connect-timeout 10 --max-time 30 --output /dev/null \
+  --write-out 'HTTP=%{http_code} bytes=%{size_download} exit=%{exitcode}\n' \
+  https://www.facebook.com/
+```
+
+Маршрутизатор различает входы по SNI. TLS снимается на loopback
+`https_proxy_local_port` (4445 по умолчанию); затем обычный Squid проверяет пароль.
+Клиентский адрес сохраняется на access для ACL, а на upstream остаётся намеренно
+обезличенным. Наружу не открывается новый порт; HTTP-прокси и SNI соседей продолжают
+работать. Внешний CONNECT использует ALPN HTTP/1.1, протокол сайта внутри туннеля
+выбирает браузер. Используются существующие лимиты nginx, зона сессий проекта и
+расчёт четырёх слотов nginx на туннель. Нового постоянно работающего прокси-процесса
+нет; Certbot запускается периодически для продления сертификатов.
+
+Клиентский HTTPS и ACME по умолчанию выключены. При выключении HTTPS удаляются
+только его собственные stream-фрагменты и HTTP-сайт ACME. Certbot-сертификат,
+таймер и обработчик reload сохраняются: ими могут пользоваться другие сервисы.
+Если имя больше не используется, отдельно удалите его сертификат через
+`certbot delete --cert-name proxy.example.com`, чтобы прекратить попытки продления.
+Невалидные TLS-фрагменты откатываются до reload общего nginx.
+
+Проверка настоящего nginx на случайных loopback-портах:
+
+```sh
+AIPROXY_TEST_NGINX=/usr/sbin/nginx \
+AIPROXY_TEST_NGINX_STREAM=/usr/lib/nginx/modules/ngx_stream_module.so \
+python3 -m unittest discover -s tests -p test_https_proxy.py -v
+```
+
+Проверяются общий SNI router, HTTPS CONNECT, ALPN, передача блоков данных,
+сохранение адреса access-клиента, прежний HTTP-вход и отказ при неверном имени
+сертификата. Это локальный функциональный тест, а не замер производительности.
+
 ## Использование
 
 0. Создайте рабочие файлы из образцов (оба исключены из контроля версий: они содержат

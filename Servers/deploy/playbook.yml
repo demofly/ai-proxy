@@ -58,6 +58,43 @@
     # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
+    - name: "Проверить параметры клиентского HTTPS-прокси"
+      ansible.builtin.assert:
+        that:
+          - proxy_role == 'access'
+          - enable_auth | default(false) | bool
+          - behind_nginx | default(true) | bool
+          - https_proxy_hostname | default('') is match('^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$')
+          - https_proxy_hostname | default('') | lower not in [mtproxy_fake_tls_domain | default('max.ru') | lower, mtproxy_hostname | default('') | lower, squid_tls_sni | default('transit.internal') | lower]
+          - https_proxy_local_port | default(4445) | int > 1024
+          - https_proxy_local_port | default(4445) | int < 65536
+          - https_proxy_local_port | default(4445) | int not in [443, squid_local_port | default(3128) | int, squid_mgmt_port | default(3129) | int, mtproxy_relay_port | default(9443) | int]
+          - https_proxy_certificate | default('/etc/letsencrypt/live/' ~ https_proxy_hostname | default('') ~ '/fullchain.pem') is match('^/[^\s;{}]+$')
+          - https_proxy_certificate_key | default('/etc/letsencrypt/live/' ~ https_proxy_hostname | default('') ~ '/privkey.pem') is match('^/[^\s;{}]+$')
+        fail_msg: >-
+          HTTPS-прокси требует access с enable_auth=true, nginx на 443,
+          отдельное DNS-имя https_proxy_hostname, свободный локальный порт
+          и абсолютные пути к публично доверенному сертификату и ключу без пробелов.
+        success_msg: "Параметры клиентского HTTPS-прокси проверены."
+      when: https_proxy_enabled | default(false) | bool
+      tags: [always]
+
+    - name: "Проверить параметры выпуска сертификата HTTPS-прокси"
+      ansible.builtin.assert:
+        that:
+          - https_proxy_enabled | default(false) | bool
+          - https_proxy_acme_email | default('') is match('^[^\s@]+@[^\s@]+\.[^\s@]+$')
+          - https_proxy_acme_webroot | default('/var/www/certbot') is match('^/[^\s;{}]+$')
+          - https_proxy_certificate is not defined
+          - https_proxy_certificate_key is not defined
+        fail_msg: >-
+          Автоматический ACME требует включённый HTTPS-прокси, контактный email,
+          абсолютный webroot без пробелов и стандартные пути Let’s Encrypt.
+          Все A/AAAA имени должны вести на этот узел с доступным портом 80.
+        success_msg: "Параметры выпуска сертификата HTTPS-прокси проверены."
+      when: https_proxy_acme_enabled | default(false) | bool
+      tags: [always]
+
     # Отсутствие флага сохраняет прежний транспорт. TLS включается явно
     # и требует согласованного развёртывания upstream перед access.
     - name: "Определить параметры TLS-участка с учётом inventory"
@@ -180,12 +217,12 @@
         recurse: false
       loop:
         - path: /etc/nginx/stream.d
-          own: ["00-sni-router.conf", "10-aiproxy-*.conf", "10-mtproxy-tls.conf",
+          own: ["00-sni-router.conf", "10-aiproxy-*.conf", "11-aiproxy-https-proxy.conf", "10-mtproxy-tls.conf",
                 "20-squid-tls-term.conf"]
         - path: /etc/nginx/stream.d/sni-map.d
-          own: ["aiproxy.conf", "mtproxy.conf", "squid.conf"]
+          own: ["aiproxy.conf", "aiproxy-https-proxy.conf", "mtproxy.conf", "squid.conf"]
         - path: /etc/nginx/conf.d
-          own: ["default.conf"]
+          own: ["default.conf", "aiproxy-https-acme.conf"]
       loop_control:
         label: "{{ item.path }}"
       register: _foreign_nginx_files
@@ -232,7 +269,7 @@
     - name: "Учесть общий nginx в плане ресурсов"
       tags: [always]
       ansible.builtin.set_fact:
-        _proxy_nginx_needed: "{{ behind_nginx | default(false) | bool or mtproxy_enabled | default(false) | bool or _proxy_nginx_state.stdout == 'active' }}"
+        _proxy_nginx_needed: "{{ https_proxy_enabled | default(false) | bool or behind_nginx | default(false) | bool or mtproxy_enabled | default(false) | bool or _proxy_nginx_state.stdout == 'active' }}"
 
     - name: "Проверить доли памяти и резервы узла"
       tags: [always]
@@ -874,7 +911,7 @@
 
     - name: "Определить работу Squid за nginx с учётом inventory"
       ansible.builtin.set_fact:
-        nginx_on_443: "{{ behind_nginx | default(mtproxy_enabled | default(false) | bool or _nginx_443_detect.stdout | trim | bool) }}"
+        nginx_on_443: "{{ https_proxy_enabled | default(false) | bool or behind_nginx | default(mtproxy_enabled | default(false) | bool or _nginx_443_detect.stdout | trim | bool) }}"
       tags: [nginx]
 
     # ===========================================================================

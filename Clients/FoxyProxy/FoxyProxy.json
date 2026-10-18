@@ -48,7 +48,7 @@
         {
           "type": "regex",
           "title": "Social",
-          "pattern": "^(?:https?|wss?)://(?:(?:(?:[a-z0-9-]+\\.)*youtu\\.be|(?:[a-z0-9-]+\\.)*(?:cdninstagram|facebook|fb|fbsbx|ggpht|googlevideo|instagram|linkedin|medium|messenger|twitter|youtube|youtube\\-nocookie|ytimg)\\.com|(?:[a-z0-9-]+\\.)*(?:fb|t)\\.me|(?:[a-z0-9-]+\\.)*fbcdn\\.net|(?:[a-z0-9-]+\\.)*telegram\\.org))\\.?(?::[0-9]{1,5})?(?:[/?#]|$)",
+          "pattern": "^(?:https?|wss?)://(?:(?:(?:[a-z0-9-]+\\.)*youtu\\.be|(?:[a-z0-9-]+\\.)*t\\.co|(?:[a-z0-9-]+\\.)*(?:cdninstagram|facebook|fb|fbsbx|ggpht|googlevideo|instagram|linkedin|medium|messenger|twimg|twitter|x|youtube|youtube\\-nocookie|ytimg)\\.com|(?:[a-z0-9-]+\\.)*(?:fb|t)\\.me|(?:[a-z0-9-]+\\.)*fbcdn\\.net|(?:[a-z0-9-]+\\.)*telegram\\.org))\\.?(?::[0-9]{1,5})?(?:[/?#]|$)",
           "active": true
         },
         {

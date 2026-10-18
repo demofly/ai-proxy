@@ -1,0 +1,101 @@
+---
+- name: "Установить Certbot для HTTPS-прокси"
+  ansible.builtin.apt:
+    name: certbot
+    state: present
+
+- name: "Создать webroot и каталог обработчиков продления"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - "{{ https_proxy_acme_webroot | default('/var/www/certbot') }}"
+    - /etc/letsencrypt/renewal-hooks/deploy
+
+- name: "Сохранить прежний HTTP-фрагмент ACME для отката"
+  ansible.builtin.slurp:
+    src: /etc/nginx/conf.d/aiproxy-https-acme.conf
+  register: _https_acme_previous
+  failed_when: false
+
+- name: "Настроить HTTP-проверку ACME с откатом"
+  block:
+    - name: "Разместить именной HTTP-сайт проверки ACME"
+      ansible.builtin.template:
+        src: aiproxy-https-acme.conf.j2
+        dest: /etc/nginx/conf.d/aiproxy-https-acme.conf
+        owner: root
+        group: root
+        mode: '0644'
+      register: _https_acme_site
+
+    - name: "Проверить nginx перед выпуском сертификата"
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+  rescue:
+    - name: "Восстановить прежний HTTP-фрагмент ACME"
+      ansible.builtin.copy:
+        content: "{{ _https_acme_previous.content | b64decode }}"
+        dest: /etc/nginx/conf.d/aiproxy-https-acme.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: _https_acme_previous.content is defined
+
+    - name: "Удалить новый HTTP-фрагмент ACME при откате"
+      ansible.builtin.file:
+        path: /etc/nginx/conf.d/aiproxy-https-acme.conf
+        state: absent
+      when: _https_acme_previous.content is not defined
+
+    - name: "Остановить развёртывание после отката HTTP-проверки ACME"
+      ansible.builtin.fail:
+        msg: "Именной HTTP-сайт ACME не прошёл nginx -t; прежний фрагмент восстановлен."
+
+- name: "Применить HTTP-проверку ACME до запуска Certbot"
+  ansible.builtin.systemd:
+    name: nginx
+    state: "{{ 'reloaded' if _nginx_present_before.stat.exists else 'started' }}"
+  when: _https_acme_site.changed
+
+- name: "Настроить перечитывание nginx после продления сертификатов"
+  ansible.builtin.copy:
+    dest: /etc/letsencrypt/renewal-hooks/deploy/10-aiproxy-nginx
+    content: |
+      #!/bin/sh
+      set -eu
+      /usr/sbin/nginx -t
+      /usr/bin/systemctl reload nginx
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: "Выпустить или продлить сертификат HTTPS-прокси через webroot"
+  ansible.builtin.command:
+    argv:
+      - certbot
+      - certonly
+      - --webroot
+      - -w
+      - "{{ https_proxy_acme_webroot | default('/var/www/certbot') }}"
+      - --non-interactive
+      - --agree-tos
+      - --email
+      - "{{ https_proxy_acme_email }}"
+      - --cert-name
+      - "{{ https_proxy_hostname }}"
+      - -d
+      - "{{ https_proxy_hostname }}"
+      - --keep-until-expiring
+  register: _https_certbot
+  changed_when: "'not yet due' not in _https_certbot.stdout"
+
+- name: "Включить автоматическое продление Certbot"
+  ansible.builtin.systemd:
+    name: certbot.timer
+    enabled: true
+    state: started

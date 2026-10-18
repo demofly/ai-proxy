@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# Named ACME vhost; default HTTP sites remain owned by their projects.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ https_proxy_hostname }};
+    location ^~ /.well-known/acme-challenge/ {
+        root {{ https_proxy_acme_webroot | default('/var/www/certbot') }};
+        default_type text/plain;
+        try_files $uri =404;
+    }
+    location / { return 404; }
+}
