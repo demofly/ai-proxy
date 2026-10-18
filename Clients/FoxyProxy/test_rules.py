@@ -32,16 +32,10 @@ class RulesTest(unittest.TestCase):
         for url in (
             "https://rr1---sn-example.googlevideo.com/videoplayback?sig=" + "a.b." * 4000,
             "https://www.youtube-nocookie.com/embed/example",
-            "https://files.oaiusercontent.com/file/example",
             "wss://bridge.claudeusercontent.com/bridge",
-            "wss://www.figma.com/socket",
-            "https://accounts.spacex.ai/sign-in",
-            "https://i.pinimg.com/originals/example.jpg",
             "https://scontent-example.cdninstagram.com/media/example.mp4",
-            "https://sf16-website-login.neutral.tiktokcdn-eu.com/file.js",
-            "https://p16.muscdn.com/img/example.jpg",
-            "https://v3.fal.media/files/example.mp4",
-            "https://cas-server.xethub.hf.co/reconstruction/example",
+            "https://www.canva.com/",
+            "https://as1.ftcdn.net/image.jpg",
             "HTTPS://CHATGPT.COM?new=true",
             "https://chatgpt.com.:443/",
         ):
@@ -49,10 +43,11 @@ class RulesTest(unittest.TestCase):
                 self.assertTrue(self.matches(url))
 
     def test_unrelated_domains_and_shared_clouds_stay_direct(self):
-        for host in ("example.org", "example.ai", "google.com", "mail.google.com",
+        for host in ("example.org", "example.ai", "perplexity.ai", "www.perplexity.ai", "google.com", "mail.google.com",
                      "maps.googleapis.com", "storage.googleapis.com", "example.amazonaws.com",
                      "unrelated.cloudfront.net", "unrelated.vercel.app", "unrelated.supabase.co",
-                     "evil.workos.imgix.net", "example.cloudflare.com"):
+                     "evil.workos.imgix.net", "figma.com", "tiktok.com", "pinterest.com",
+                     "oaiusercontent.com", "spacex.ai", "hf.co", "notion.so", "mistral.ai"):
             with self.subTest(host=host):
                 self.assertFalse(self.matches("https://" + host + "/"))
 
@@ -70,9 +65,38 @@ class RulesTest(unittest.TestCase):
                     self.assertFalse(self.matches(url))
 
     def test_exact_shared_hosts_do_not_include_arbitrary_subdomains(self):
-        self.assertTrue(self.matches("https://workos.imgix.net/image"))
-        self.assertFalse(self.matches("https://other.imgix.net/image"))
-        self.assertFalse(self.matches("https://extra.workos.imgix.net/image"))
+        self.assertTrue(self.matches("https://as1.ftcdn.net/image"))
+        self.assertFalse(self.matches("https://other.ftcdn.net/image"))
+        self.assertFalse(self.matches("https://extra.as1.ftcdn.net/image"))
+        self.assertFalse(self.matches("https://canva.com/"))
+        self.assertFalse(self.matches("https://other.canva.com/"))
+
+    def test_common_suffixes_are_factored_with_exact_host_semantics(self):
+        pattern = rules.host_pattern(["chatgpt.com", "openai.com"], ["accounts.google.com"])
+        self.assertEqual(pattern.count(r"\.com"), 1)
+        for url in ("https://chatgpt.com/", "https://sub.openai.com/", "https://accounts.google.com/"):
+            self.assertTrue(re.search(pattern, url))
+        for url in ("https://google.com/", "https://sub.accounts.google.com/", "https://fakeopenai.com/"):
+            self.assertFalse(re.search(pattern, url))
+        self.assertTrue(all(r["pattern"].count(r"\.com") <= 1 for r in self.generated))
+
+    def test_exact_parent_and_descendant_domains(self):
+        pattern = rules.host_pattern(["app.example.com"], ["example.com"])
+        for host in ("example.com", "app.example.com", "sub.app.example.com"):
+            self.assertTrue(re.search(pattern, "https://" + host + "/"))
+        self.assertFalse(re.search(pattern, "https://other.example.com/"))
+        self.assertEqual(rules.host_pattern(["example.com"], ["app.example.com"]),
+                         rules.host_pattern(["example.com"]))
+
+    def test_compact_existing_rule_keeps_exact_hosts_separate(self):
+        old = (rules.SCHEME + "(?:" + rules.SUBDOMAINS
+               + r"(?:chatgpt\.com|openai\.com)|(?:accounts\.google\.com))" + rules.END)
+        new = rules.compact_pattern(old)
+        self.assertEqual(new, rules.host_pattern(["chatgpt.com", "openai.com"], ["accounts.google.com"]))
+        self.assertEqual(rules.compact_pattern(new), new)
+        self.assertFalse(re.search(new, "https://sub.accounts.google.com/"))
+        custom = r"^https://example\.org/(?:com|net)/"
+        self.assertEqual(rules.compact_pattern(custom), custom)
 
     def test_finite_legacy_expression(self):
         self.assertEqual(rules.finite_expression(r"cursor(api)?\.(sh|com|so)"),
@@ -112,12 +136,13 @@ class RulesTest(unittest.TestCase):
 
     def test_old_titles_migrate_without_changing_patterns_or_states(self):
         previous = copy.deepcopy(self.generated)
-        for rule, category in zip(previous, self.catalog["categories"]):
+        categories = [c for c, domains, hosts in rules.category_hosts(self.catalog) if domains or hosts]
+        for rule, category in zip(previous, categories):
             rule["title"] = "[AI Proxy:" + category["id"] + "] Old description"
         previous[0]["active"] = False
         migrated = rules.merge_settings({"data": [{"type": "http", "include": previous}]}, self.catalog)
         actual = migrated["data"][0]["include"]
-        self.assertEqual([r["title"] for r in actual], [c["title"] for c in self.catalog["categories"]])
+        self.assertEqual([r["title"] for r in actual], [c["title"] for c in categories])
         self.assertEqual([{**r, "title": old["title"]} for r, old in zip(actual, previous)], previous)
         self.assertEqual(rules.merge_settings(migrated, self.catalog), migrated)
 
@@ -134,9 +159,26 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(merged["data"][0]["include"], self.generated)
 
     def test_small_deduplicated_ruleset(self):
-        self.assertEqual(len(self.generated), 6)
+        self.assertEqual(len(self.generated), 5)
         flattened = [name for _, domains, hosts in rules.category_hosts(self.catalog) for name in domains + hosts]
         self.assertEqual(len(flattened), len(set(flattened)))
+
+    def test_original_user_exceptions_are_preserved(self):
+        for host in ("chatgpt.com", "gemini.google.com", "cursorapi.so", "sentry.io",
+                     "cloudflare.com", "azure.com", "intel.com", "phrack.org", "oracleimg.com",
+                     "githubcopilot.com", "play.google.com", "doubleclick.net", "developer.amd.com"):
+            with self.subTest(host=host):
+                self.assertTrue(self.matches("https://sub." + host + "/"))
+
+    def test_registry_scope_does_not_expand_exact_hosts(self):
+        entries = {entry for c in self.catalog["categories"] for s in c["services"]
+                   if s["basis"] == "rkn" for entry in s["registry_entries"]}
+        self.assertEqual(len(entries), 12)
+        for c in self.catalog["categories"]:
+            for s in c["services"]:
+                if s["basis"] == "rkn":
+                    self.assertEqual(set(s["registry_entries"]),
+                                     {"*." + d for d in s.get("domains", [])} | set(s.get("hosts", [])))
 
 
 if __name__ == "__main__":

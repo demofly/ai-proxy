@@ -27,14 +27,66 @@ def covered(host: str, domains: set[str]) -> bool:
 
 
 def host_pattern(domains: list[str], hosts: list[str] = ()) -> str:
-    branches = []
-    if domains:
-        branches.append(SUBDOMAINS + "(?:" + "|".join(map(re.escape, sorted(domains))) + ")")
-    if hosts:
-        branches.append("(?:" + "|".join(map(re.escape, sorted(hosts))) + ")")
-    if not branches:
+    if not domains and not hosts:
         raise ValueError("Empty hostname rule")
-    return SCHEME + "(?:" + "|".join(branches) + ")" + END
+    # A reversed label tree factors common suffixes, including between exact
+    # hosts and domains with subdomains. Only JavaScript-compatible syntax is used.
+    tree = {}
+    for names, subdomains in ((domains, True), (hosts, False)):
+        for host in names:
+            node = tree
+            for label in reversed(host.split(".")):
+                node = node.setdefault(label, {})
+            node[None] = SUBDOMAINS if subdomains else node.get(None, "")
+
+    def choice(items):
+        return items[0] if len(items) == 1 else "(?:" + "|".join(items) + ")"
+
+    def render(node, root=False):
+        if node.get(None) == SUBDOMAINS:
+            return SUBDOMAINS
+        grouped = {}
+        for label in sorted(key for key in node if key is not None):
+            grouped.setdefault(render(node[label]), []).append(re.escape(label))
+        if not grouped:
+            return ""
+        value = choice([prefix + choice(labels) for prefix, labels in grouped.items()])
+        if not root:
+            value += r"\."
+            if None in node:
+                value = "(?:" + value + ")?"
+        return value
+
+    return SCHEME + "(?:" + render(tree, root=True) + ")" + END
+
+
+def compact_pattern(pattern: str) -> str:
+    """Compact earlier generated hostname rules; preserve arbitrary expressions."""
+    prefix, suffix = SCHEME + "(?:", ")" + END
+    if not pattern.startswith(prefix) or not pattern.endswith(suffix):
+        return pattern
+    body = pattern[len(prefix):-len(suffix)]
+    domains, hosts = [], []
+    try:
+        if body.startswith(SUBDOMAINS + "(?:"):
+            body = body[len(SUBDOMAINS + "(?:"):]
+            if ")|(?:" in body:
+                domain_expression, body = body.split(")|(?:", 1)
+                domains = finite_expression(domain_expression)
+                if not body.endswith(")"):
+                    return pattern
+                hosts = finite_expression(body[:-1])
+            elif body.endswith(")"):
+                domains = finite_expression(body[:-1])
+            else:
+                return pattern
+        elif body.startswith("(?:") and body.endswith(")"):
+            hosts = finite_expression(body[3:-1])
+        else:
+            return pattern
+        return host_pattern(domains, hosts)
+    except ValueError:
+        return pattern
 
 
 def load_catalog(path: Path = HERE / "domains.json") -> dict:
@@ -54,10 +106,17 @@ def load_catalog(path: Path = HERE / "domains.json") -> dict:
         for service in category["services"]:
             if not service.get("sources"):
                 raise ValueError("Each service needs a primary source")
+            basis = service.get("basis")
+            if basis not in ("user", "rkn"):
+                raise ValueError("Declare user baseline or registry evidence for each service")
+            if basis == "rkn":
+                expected = {"*." + d for d in service.get("domains", [])} | set(service.get("hosts", []))
+                if not expected or expected != set(service.get("registry_entries", [])):
+                    raise ValueError("Registry entries must match the routing scope")
             for kind in ("domains", "hosts"):
                 for host in service.get(kind, []):
                     if (not re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", host)
-                            or host in SHARED_ROOTS):
+                            or (basis != "user" and host in SHARED_ROOTS)):
                         raise ValueError("Use specific hostnames for shared infrastructure: " + host)
     return catalog
 
@@ -127,9 +186,10 @@ def finite_expression(expression: str) -> list[str]:
                 if pos >= len(expression) or expression[pos] != ")":
                     raise ValueError("Unclosed group")
                 pos += 1
-            elif char == "\\" and expression[pos:pos + 1] == ".":
+            elif char == "\\" and expression[pos:pos + 1] in (".", "-"):
+                literal = expression[pos]
                 pos += 1
-                choices = ["."]
+                choices = [literal]
             elif re.fullmatch(r"[a-z0-9-]", char):
                 choices = [char]
             else:
@@ -195,7 +255,8 @@ def merge_settings(preferences: dict, catalog: dict) -> dict:
                 continue
             domains = legacy_domains(rule)
             if domains is None:
-                retained.append(rule)
+                retained.append({**rule, "pattern": compact_pattern(rule["pattern"])}
+                                if rule.get("type") == "regex" else rule)
                 continue
             remaining = [d for d in domains if not covered(d, roots)]
             remaining = [d for d in remaining if not covered(d, set(remaining) - {d})]
