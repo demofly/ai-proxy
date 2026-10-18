@@ -82,7 +82,7 @@ http_port {{ squid_port }} tcpkeepalive=60,10,30
 #            При отказе пира он исключается из кольца, его пользователи уходят на живые.
 # connect-fail-limit=2 - после 2 неудачных попыток пометить как недоступный
 # connect-timeout=5 - таймаут подключения 5 секунд (быстрое обнаружение проблем)
-{% for upstream_host in groups['upstreams'] %}
+{% for upstream_host in squid_upstream_hosts | default(groups['upstreams']) %}
 {% set upstream = hostvars[upstream_host] %}
 {% if squid_transit_tls | default(false) | bool %}
 {#- Порт зависит от устройства принимающего узла: при включённом MTProxy там

@@ -13,6 +13,9 @@ all:
     access_proxies:
       hosts:
         access-01:
+          # Необязательный пул Squid для этого access; по умолчанию вся группа upstreams.
+          # Позволяет исключить неисправную связь; нужны существующие имена без повторов.
+          # squid_upstream_hosts: [upstream-01, upstream-02]
           # Адрес SSH; также источник адреса узла для ACL и межузлового трафика.
           ansible_host: 203.0.113.1
           # Начальное состояние VRRP; действует при enable_keepalived: true.

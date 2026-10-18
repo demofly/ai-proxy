@@ -84,6 +84,27 @@
       when: squid_transit_tls | bool
       tags: [always]
 
+    - name: "Определить пул upstream для Squid на access"
+      ansible.builtin.set_fact:
+        squid_upstream_hosts: "{{ squid_upstream_hosts | default(groups['upstreams']) }}"
+      when: proxy_role == 'access'
+      tags: [always]
+
+    - name: "Проверить состав пула upstream для Squid"
+      ansible.builtin.assert:
+        that:
+          - squid_upstream_hosts is sequence and squid_upstream_hosts is not string and squid_upstream_hosts is not mapping
+          - squid_upstream_hosts | length > 0
+          - squid_upstream_hosts | difference(groups['upstreams']) | length == 0
+          - squid_upstream_hosts | unique | length == squid_upstream_hosts | length
+        fail_msg: >-
+          squid_upstream_hosts должен содержать непустой список без повторов имён узлов
+          из группы upstreams. Пустой или неизвестный пул оставил бы access
+          без рабочего родительского прокси. Без переопределения используются все upstreams.
+        success_msg: "Пул upstream для Squid проверен: {{ squid_upstream_hosts | length }} узлов."
+      when: proxy_role == 'access'
+      tags: [always]
+
     - name: "Определить домен fake-TLS MTProxy с учётом inventory"
       ansible.builtin.set_fact:
         mtproxy_fake_tls_domain: '{{ mtproxy_fake_tls_domain | default("max.ru") }}'
@@ -769,6 +790,7 @@
           не отправляет SNI, необходимый маршрутизатору upstream. На Debian/Ubuntu
           плейбук выбирает squid-openssl. На других системах установите сборку
           с --with-openssl до включения squid_transit_tls.
+        success_msg: "Сборка Squid поддерживает SNI участка через OpenSSL."
       when:
         - squid_transit_tls | bool
         - not ansible_check_mode
@@ -866,6 +888,43 @@
       changed_when: false
       failed_when: false
 
+    # =======================================================================
+    # Раздача материала участка узлам
+    # =======================================================================
+    # Upstream получает сертификат И ключ — он принимающая сторона; access получает
+    # только сертификат, и служит тот доверенным якорем (tls-cafile), а не средством
+    # представиться. Закрытый ключ на access не нужен и потому не передаётся.
+    # Роль nginx сама проверяет конфигурацию access через squid -k parse:
+    # доверенный CA должен существовать до её запуска, включая первое включение TLS.
+    - name: "Разместить сертификат и ключ участка на принимающем узле"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/tls/squid-transit.{{ item.ext }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { ext: 'crt', dest: '/etc/squid/transit.crt', mode: '0644' }
+        - { ext: 'key', dest: '/etc/squid/transit.key', mode: '0600' }
+      loop_control:
+        label: "{{ item.dest }}"
+      when:
+        - squid_transit_tls | default(false) | bool
+        - proxy_role == 'upstream'
+      notify: "Перечитать конфигурацию Squid"
+
+    - name: "Разместить доверенный сертификат участка на исходящем узле"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/tls/squid-transit.crt"
+        dest: /etc/squid/upstream-transit-ca.crt
+        owner: root
+        group: root
+        mode: '0644'
+      when:
+        - squid_transit_tls | default(false) | bool
+        - proxy_role == 'access'
+      notify: "Перечитать конфигурацию Squid"
+
     # ===========================================================================
     # Phase: nginx и MTProxy (ПЕРЕД конфигурацией Squid)
     # nginx и MTProxy настраиваются раньше Squid, потому что занимают внешний порт 443
@@ -958,41 +1017,6 @@
     # ===========================================================================
     # Phase: Squid configuration
     # ===========================================================================
-
-    # =======================================================================
-    # Раздача материала участка узлам
-    # =======================================================================
-    # Upstream получает сертификат И ключ — он принимающая сторона; access получает
-    # только сертификат, и служит тот доверенным якорем (tls-cafile), а не средством
-    # представиться. Закрытый ключ на access не нужен и потому не передаётся.
-    - name: "Разместить сертификат и ключ участка на принимающем узле"
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/tls/squid-transit.{{ item.ext }}"
-        dest: "{{ item.dest }}"
-        owner: root
-        group: root
-        mode: "{{ item.mode }}"
-      loop:
-        - { ext: 'crt', dest: '/etc/squid/transit.crt', mode: '0644' }
-        - { ext: 'key', dest: '/etc/squid/transit.key', mode: '0600' }
-      loop_control:
-        label: "{{ item.dest }}"
-      when:
-        - squid_transit_tls | default(false) | bool
-        - proxy_role == 'upstream'
-      notify: "Перечитать конфигурацию Squid"
-
-    - name: "Разместить доверенный сертификат участка на исходящем узле"
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/tls/squid-transit.crt"
-        dest: /etc/squid/upstream-transit-ca.crt
-        owner: root
-        group: root
-        mode: '0644'
-      when:
-        - squid_transit_tls | default(false) | bool
-        - proxy_role == 'access'
-      notify: "Перечитать конфигурацию Squid"
 
     # Конфигурация для access прокси (только если MTProxy отключён)
     # При включённом MTProxy deploy squid config происходит в роли nginx

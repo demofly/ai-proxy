@@ -29,13 +29,17 @@ class ProxyTransitTests(unittest.TestCase):
                                     'access_proxies': {'hosts': {'access-test': {'ansible_host': '192.0.2.10'}}},
                                     'upstreams': {'hosts': {'upstream-test': {
                                         'ansible_host': '198.51.100.20', 'squid_port': 443,
-                                        'mtproxy_enabled': True}}}}}}
+                                        'mtproxy_enabled': True},
+                                        'upstream-two': {'ansible_host': '198.51.100.21',
+                                                         'squid_port': 443, 'mtproxy_enabled': True}}}}}}
             (tmp / 'inventory.yml').write_text(yaml.safe_dump(inventory), encoding='utf-8')
             values = dict(enable_caching=False, enable_logging=False, enable_auth=True,
                           nginx_on_443=True, squid_port=443, squid_workers=1,
-                          ansible_os_family='Debian', _squid_version_raw={'stdout': '--with-gnutls'})
+                          proxy_role='access', ansible_os_family='Debian', _squid_version_raw={'stdout': '--with-gnutls'})
             values.update(overrides or {})
-            tasks = copy.deepcopy([defaults, validation])
+            pool = [task for task in source['pre_tasks'] if task['name'] in (
+                'Определить пул upstream для Squid на access', 'Проверить состав пула upstream для Squid')]
+            tasks = copy.deepcopy([defaults, validation] + pool)
             tasks.append({'name': 'Определить пакет Squid по настройкам участка', 'ansible.builtin.copy': {
                 'content': package, 'dest': str(tmp / 'package.conf')}})
             for name, template, conditional in (
@@ -58,7 +62,7 @@ class ProxyTransitTests(unittest.TestCase):
                                     env=env, capture_output=True, text=True, timeout=60)
             if rejected:
                 self.assertNotEqual(result.returncode, 0, result.stdout)
-                self.assertIn('Шифрование участка включено', result.stdout)
+                self.assertIn(rejected if isinstance(rejected, str) else 'Шифрование участка включено', result.stdout)
                 self.assertFalse(list(tmp.glob('*.conf')))
                 return None
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -100,6 +104,20 @@ class ProxyTransitTests(unittest.TestCase):
                                 '_squid_version_raw': {'stdout': '--with-openssl'}})
         self.assert_plain(rendered)
         self.assertEqual(rendered['package'].strip(), 'squid-openssl')
+
+    def test_access_can_exclude_an_unhealthy_peer_without_changing_other_nodes(self):
+        selected = self.render({'squid_transit_tls': True, 'squid_upstream_hosts': ['upstream-two']})
+        peers = [line for line in selected['access'].splitlines() if line.startswith('cache_peer ')]
+        self.assertEqual(len(peers), 1)
+        self.assertIn('198.51.100.21 parent ', peers[0])
+        self.assertNotIn('198.51.100.20 parent ', selected['access'])
+        defaults = self.render()
+        self.assertEqual(sum(line.startswith('cache_peer ') for line in defaults['access'].splitlines()), 2)
+
+    def test_empty_or_unknown_parent_pool_fails_before_rendering(self):
+        for pool in ([], ['unknown-upstream'], 'upstream-two', ['upstream-two', 'upstream-two']):
+            with self.subTest(pool=pool):
+                self.render({'squid_upstream_hosts': pool}, rejected='squid_upstream_hosts должен')
 
     def test_empty_name_fails_before_rendering_configuration(self):
         self.render({'squid_transit_tls': True, 'squid_tls_sni': ''}, rejected=True)
