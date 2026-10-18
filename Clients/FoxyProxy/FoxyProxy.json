@@ -36,7 +36,7 @@
         {
           "type": "regex",
           "title": "ChatGPT",
-          "pattern": "^https?://(.*\\.)*(chatgpt|openai)\\.com($|/)",
+          "pattern": "^https?://(.*\\.)*(chatgpt|openai|oaistatic)\\.com($|/)",
           "active": true
         },
         {
