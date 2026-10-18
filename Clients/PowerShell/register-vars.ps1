@@ -10,8 +10,4 @@
   "User"      # или "Machine" для всей системы
 )
 
-[Environment]::SetEnvironmentVariable(
-  "NO_PROXY",
-  "localhost,127.0.0.1,::1,.local",
-  "User"
-)
+& (Join-Path $PSScriptRoot 'set-no-proxy.ps1')
