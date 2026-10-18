@@ -263,7 +263,9 @@ access без доверенного материала при прогоне, �
 
 Во второй ветке маршрутизатор разбирает имя из SNI и направляет соединение
 локальному терминатору (`squid_tls_term_port`, по умолчанию 4444), тот снимает TLS
-и передаёт поток Squid, восстанавливая адрес клиента протоколом PROXY.
+и передаёт поток Squid с новым PROXY-заголовком от loopback. Входной адрес
+access-узла проверяется терминатором, исходный IP клиента в Squid намеренно
+не восстанавливается.
 
 Проверка подлинности принимающей стороны обязательна: `tls-no-default-ca` отсекает
 системные удостоверяющие центры, `tls-cafile` задаёт единственный доверенный
@@ -339,7 +341,7 @@ htpasswd -B -C 12 -bn пользователь пароль >> passwd
 | `keepalived_interface` | Сетевой интерфейс | auto (default gw) |
 | `keepalived_state` | MASTER или BACKUP | per-host |
 | `keepalived_priority` | Приоритет (100/90) | per-host |
-| `read_timeout` | Предел ПРОСТОЯ туннеля: соединение закрывается после этого срока без передачи данных в обе стороны. Таймер переармируется при каждой передаче, поэтому активный обмен не прерывается никогда | 1 hour |
+| `read_timeout` | Предел ПРОСТОЯ туннеля: соединение закрывается после этого срока без передачи данных в обе стороны. Таймер переармируется при каждой передаче, активный обмен продлевает таймер простоя; отдельно действует абсолютный предел `client_lifetime` | 1 hour |
 | `client_lifetime` | Абсолютный предел жизни клиентского соединения Squid. Обязан быть строго больше `read_timeout`, иначе рвать будет он и предел простоя перестанет действовать | 1 day |
 | `client_idle_pconn_timeout` | Срок удержания неиспользуемого постоянного соединения от клиента | 60 seconds |
 | `squid_positive_dns_ttl` | Срок хранения разрешённого имени в собственном кеше Squid. Лежит поверх кеша резолвера: очистка unbound на эти записи не влияет | 6 hours |
@@ -394,12 +396,12 @@ htpasswd -B -C 12 -bn пользователь пароль >> passwd
 | `crowdsec_enabled` | Включить CrowdSec IPS | true |
 | `crowdsec_memory_mb` | Устаревшее имя явного предела CrowdSec, МиБ; предпочтительно `proxy_memory_limits.crowdsec` | автоматически, минимум 192 |
 | `crowdsec_fw_bouncer_memory_mb` | Устаревшее имя явного предела bouncer, МиБ; предпочтительно `proxy_memory_limits.crowdsec_bouncer` | автоматически, минимум 24 |
-| `mtproxy_enabled` | Включить MTProxy | true |
+| `mtproxy_enabled` | Включить MTProxy | false в роли; true в образце inventory |
 | `mtproxy_fake_tls_domain` | Домен fake-TLS, закодированный в секрете; также SNI межузлового MTProxy-реле. На всех upstream одинаков | `max.ru` |
-| `mtproxy_hostname` | Публичный домен для MTProxy (маршрутизация SNI) | tgproxy.example.com |
+| `mtproxy_hostname` | Необязательное дополнительное имя маршрутизации SNI; основной маршрут — `mtproxy_fake_tls_domain` | `""` |
 | `mtproxy_local_port` | Порт mtg daemon (upstream) | 2083 |
-| `mtproxy_secret` | Hex-секрет | "" (автоген) |
-| `mtproxy_max_connections` | Максимум подключений per IP | 100 |
+| `mtproxy_secret` | Общий hex-секрет кластера; при пустом значении сначала переиспользуется существующий, затем однократно генерируется общий — [подробности](MTProxy.md) | `""` |
+| `mtproxy_max_connections` | Общий предел сессий mtg, дополнительно ограниченный памятью и FD; не на IP | 64 в роли; 100 в образце |
 | `mtproxy_version` | Версия mtg | 2.2.8 |
 
 ## Порядок развёртывания
@@ -520,7 +522,7 @@ nginx выполняет SNI-based маршрутизацию на порту 44
 
 ```
 Client → nginx:443 (access, ssl_preread + PROXY protocol)
-            ├─ SNI=git.example.com / tgproxy.example.com → MTProxy relay
+            ├─ SNI=max.ru / tgproxy.example.com → MTProxy relay
             │     └─ TLS 1.3 relay (proxy_ssl) → upstream:443
             └─ Default → localhost:3128 (Squid, PROXY protocol)
                   └─ cache_peer (plain HTTP) → upstream:80 (Squid)
@@ -532,7 +534,7 @@ Client → nginx:443 (access, ssl_preread + PROXY protocol)
 
 ```
                             ┌─ nginx:443 (ssl_preread + PROXY protocol)
-Access nodes ──┤            │     ├─ SNI=<mtproxy_hostname> → MTProxy TLS terminator (:4443)
+Access nodes ──┤            │     ├─ SNI=max.ru / <mtproxy_hostname, если задан> → MTProxy TLS terminator (:4443)
                │            │     │       └─ TLS 1.3 termination → mtg daemon (:2083)
                │            │     │
                └────────────┘     └─ SNI пуст (plain HTTP от access Squid) → default
@@ -642,11 +644,11 @@ ssh root@<host> 'cscli decisions delete --ip 1.2.3.4'
 - **Access nodes**: nginx stream SNI-роутинг на порту 443, TLS 1.3 relay к upstream
 
 **Функции:**
-- DPI-circumvention через fake-TLS домен (`git.example.com`)
+- DPI-circumvention через fake-TLS домен (`max.ru`)
 - TLS 1.3 шифрование access→upstream transit (self-signed cert, `proxy_ssl`)
 - Load balancing между upstream instances (round-robin)
 - Firewall защита: доступ к MTProxy только от access nodes
-- PROXY protocol: реальный IP клиента пробрасывается через всю цепочку
+- PROXY protocol переносит адрес access-узла для проверки доступа к upstream-терминатору. К mtg заголовок не передаётся: исходный IP клиента намеренно скрыт, mtg видит локальное соединение
 - Интеграция с Squid: nginx на access маршрутизирует MTProxy трафик на upstream:443, остальной — на локальный Squid (127.0.0.1:3128)
 
 **Управление:**
@@ -689,7 +691,7 @@ tg://proxy?server=203.0.113.1&port=443&secret=<hex-секрет>
 ```
 
 **Потребление ресурсов:**
-- **MTProxy (upstream)**: 64 MB RAM per instance
+- **MTProxy (upstream)**: бюджет рассчитывается автоматически, минимум 32 МиБ; число сессий ограничивается памятью и дескрипторами
 - **nginx stream (access)**: минимальное (включено в общий nginx budget)
 
 **Переменные (inventory.yml):**
@@ -705,7 +707,7 @@ AI Assistants Proxy поддерживает co-deployment на одном се�
 
 ```
 Internet → AI Proxy nginx :443 (stream SNI routing, ssl_preread, PROXY protocol)
-                ├─ SNI=git.example.com → MTProxy relay (TLS 1.3) → upstream:443
+                ├─ SNI=max.ru → MTProxy relay (TLS 1.3) → upstream:443
                 ├─ SNI=matrix.example.com → Matrix nginx (localhost:8443)
                 └─ default → Squid (localhost:3128)
                       └─ cache_peer (plain HTTP) → upstream:80
@@ -738,7 +740,7 @@ UFW Firewall ← AI Proxy (reset + policies) + Matrix (additive rules)
   00-sni-router.conf              # Shared: map + listen 443 + ssl_preread + proxy_protocol
   10-aiproxy-upstreams.conf       # ai-proxy: MTProxy relay (TLS 1.3 to upstream)
   sni-map.d/
-    aiproxy.conf                  # ai-proxy: git.example.com/tgproxy.example.com → MTProxy
+    aiproxy.conf                  # ai-proxy: max.ru/tgproxy.example.com → MTProxy
     matrix.conf                   # Matrix: matrix.example.com → Matrix nginx (co-deployment)
 
 # Upstream nodes:
@@ -755,7 +757,7 @@ UFW Firewall ← AI Proxy (reset + policies) + Matrix (additive rules)
 
 Оба проекта изолированы на уровне L4 (stream SNI routing):
 - Matrix трафик (SNI = matrix.example.com) → Matrix nginx :8443
-- MTProxy трафик (SNI = git.example.com/tgproxy.example.com) → MTProxy relay → upstream:443 (TLS 1.3)
+- MTProxy трафик (SNI = max.ru/tgproxy.example.com) → MTProxy relay → upstream:443 (TLS 1.3)
 - AI Proxy трафик (default) → Squid :3128 → upstream:80 (plain HTTP)
 
 CrowdSec защищает оба проекта единым набором правил и TI-фидов.

@@ -1,7 +1,7 @@
 <!-- [AIGD] -->
 # DD-SourceMap — Карта источников данных
 
-**Последняя правка AI:** 2026-08-29T05:48:58Z
+**Последняя правка AI:** 2026-10-18
 
 ## Описание
 
@@ -16,13 +16,21 @@
 | Белый список доменов | [DE-DM-001](DE/DE-DM-001.md) | inventory.yml (`allowed_domains`, `allowed_domain_patterns`) | `/etc/squid/squid.conf` (ACL blocks) | Squid ACL directives | `acl allowed_domains`, `acl allowed_domain_patterns`, `dstdomain`, `dstdom_regex` |
 | Конфигурационные параметры | [DE-CF-001](DE/DE-CF-001.md) | inventory.yml | Все generated configs | YAML → rendered configs | `inventory.yml`, `.j2` templates, `vars:` |
 | Записи журнала | [DE-LG-001](DE/DE-LG-001.md) | Squid daemon | `/var/log/squid/access.log` | Squid native logformat | `access_log daemon:... squid`, `acquis.yaml` |
-| Секреты | [DE-SC-001](DE/DE-SC-001.md) | inventory.yml / `mtg generate-secret` | `/etc/mtproxy/mtg.toml`, `/etc/keepalived/keepalived.conf` | TOML / Keepalived conf | `mtproxy_secret`, `keepalived_auth_pass`, `secret`, `auth_pass` |
+| Секреты | [DE-SC-001](DE/DE-SC-001.md) | inventory.yml / существующий общий конфиг / однократная генерация на контроллере | `/etc/mtproxy/mtg.toml`, `/etc/keepalived/keepalived.conf` | TOML / Keepalived conf | `mtproxy_secret`, `keepalived_auth_pass`, `secret`, `auth_pass` |
+
+## Отдельный поток клиентского JSON
+
+`Clients/FoxyProxy/domains.json` → `rules.py` → публичный `FoxyProxy.json` либо
+новый приватный экспорт при `--merge`. Адреса и пароли берутся из приватного
+входного экспорта, а не из inventory. Каталог хранит пользовательские исключения
+и доказательства добавлений по выбранному снимку РКН. Клиентский JSON не является
+выходом Ansible и не заменяет серверный ACL.
 
 ## Паттерны хранилищ для Code-First Discovery
 
 Паттерны для обнаружения хранилищ данных при реверс-инжиниринге кодовой базы (DD §DD.3.2).
 
-### Ansible Inventory (SSOT)
+### Ansible Inventory (серверные параметры)
 
 | Паттерн | Описание | Пример |
 |---|---|---|

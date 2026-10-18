@@ -2,7 +2,7 @@
 <!-- [AITS] 2026-08-30T11:52:49Z -->
 # DD-Governance — Управление данными
 
-**Последняя правка AI:** 2026-08-29T03:50:00Z
+**Последняя правка AI:** 2026-10-18
 
 ## Описание
 
@@ -37,8 +37,8 @@
 | Config Parameters | `inventory.yml` | Единая точка определения всех параметров |
 | Credentials | `Servers/deploy/passwd` в рабочем каталоге | Файл ведётся оператором командой `htpasswd`; на узлах — его копия, порождённая развёртыванием |
 | ACL | `inventory.yml` → generated configs | IP-адреса определяются в inventory, ACL генерируются автоматически |
-| Domain Lists | `inventory.yml` (allowed_domains*) | Списки определяются в inventory |
-| Secrets | `inventory.yml`, а для секрета MTProxy — узел | Пароль VRRP задаётся в инвентори; секрет MTProxy при отсутствии там порождается на узле и далее читается из `/etc/mtproxy/mtg.toml`, то есть источником истины становится сам узел |
+| Domain Lists | `inventory.yml` для Squid; `Clients/FoxyProxy/domains.json` для браузера | ACL и клиентский маршрут независимы; добавления каталога подтверждаются закреплённым снимком РКН |
+| Secrets | `inventory.yml`, существующий общий конфиг MTProxy, резерв `secrets/mtproxy-entropy` на контроллере | При пустом секрете переиспользуется общий секрет узлов; при отсутствии однократно создаётся один секрет кластера. Конфликты требуют явного выбора, ротация не выполняется |
 | Log Records | `/var/log/squid/access.log` | Генерируются Squid daemon'ом |
 
 ### Политика изменений
@@ -66,7 +66,7 @@
 | Конфигурации серверов | Regenerable (из inventory + templates) | Не требуется (regenerable) |
 | passwd | Ручное резервное копирование | По необходимости |
 | access.log | Ротацию выполняет правило `/etc/logrotate.d/squid-aiproxy`, выпускаемое развёртыванием | `squid_log_rotate_period` (умолчание `daily`) × `squid_log_rotate_keep` (умолчание 14) |
-| Секреты | Git (inventory.yml) | Каждое изменение |
+| Секреты | Приватные резервные копии inventory, TLS и общего секрета MTProxy | После согласованного изменения; рабочие секреты в Git не хранятся |
 
 ### Политика Ansible no_log
 

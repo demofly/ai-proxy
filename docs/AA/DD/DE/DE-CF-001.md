@@ -1,11 +1,12 @@
 <!-- [AIGD] -->
 # DE-CF-001 — Конфигурационные параметры
 
-**Последняя правка AI:** 2026-08-29T07:00:00Z
+**Последняя правка AI:** 2026-10-18
 
 ## Описание
 
-Конфигурационные параметры — переменные Ansible inventory, определяющие поведение всех компонентов системы AI Assistants Proxy. Inventory.yml является единственным источником истины (SSOT) для конфигурации. Параметры пропагируются через Jinja2-шаблоны на целевые серверы.
+Конфигурационные параметры — переменные Ansible inventory, определяющие поведение всех компонентов системы AI Assistants Proxy. Рабочий inventory является источником серверных параметров. Браузерный каталог
+`Clients/FoxyProxy/domains.json` и приватные клиентские настройки сопровождаются отдельно. Параметры пропагируются через Jinja2-шаблоны на целевые серверы.
 
 ## Атрибуты
 
@@ -34,17 +35,17 @@
 |---|---|---|---|
 | `ansible_user` | string | `root` | Пользователь SSH для Ansible |
 | `ansible_python_interpreter` | string | `/usr/bin/python3` | Путь к Python |
-| `read_timeout` | string | `1 hour` | Предел простоя туннеля; активный обмен не прерывается |
+| `read_timeout` | string | `1 hour` | Предел простоя; отдельно действует абсолютный `client_lifetime` |
 | `crowdsec_enabled` | boolean | `true` | Включение CrowdSec IPS |
-| `crowdsec_memory_mb` | integer | `512` | Лимит памяти CrowdSec (МБ) |
-| `crowdsec_fw_bouncer_memory_mb` | integer | `128` | Лимит памяти bouncer (МБ) |
-| `mtproxy_enabled` | boolean | `true` | Включение MTProxy |
-| `mtproxy_fake_tls_domain` | string | задаётся в инвентори; при пустом значении запись карты имён не выпускается | Домен маскировки трафика MTProxy |
-| `mtproxy_hostname` | string | `tgproxy.example.com` | Публичный домен MTProxy |
+| `crowdsec_memory_mb` | integer | автоматически, минимум 192 МиБ | Устаревший явный предел; предпочтительно `proxy_memory_limits.crowdsec` |
+| `crowdsec_fw_bouncer_memory_mb` | integer | автоматически, минимум 24 МиБ | Устаревший явный предел; предпочтительно `proxy_memory_limits.crowdsec_bouncer` |
+| `mtproxy_enabled` | boolean | `false` в роли, `true` в образце | Включение MTProxy |
+| `mtproxy_fake_tls_domain` | string | `max.ru` | Домен маскировки трафика MTProxy |
+| `mtproxy_hostname` | string | `""` | Необязательное дополнительное имя SNI |
 | `mtproxy_version` | string | `2.2.8` | Версия mtg |
 | `mtproxy_local_port` | integer | `2083` | Локальный порт mtg |
-| `mtproxy_secret` | string (hex) | — | Секрет MTProxy |
-| `mtproxy_max_connections` | integer | `100` | Макс. подключений per IP |
+| `mtproxy_secret` | string (hex) | `""` | Общий секрет; существующий переиспользуется, при отсутствии генерируется один раз для кластера |
+| `mtproxy_max_connections` | integer | `64` в роли, `100` в образце | Общий предел, ограниченный также памятью и FD |
 | `dns_servers` | list[string] | `[9.9.9.9, 8.8.8.8, 1.1.1.1]` | DNS-серверы |
 | `allowed_domains` | list[string] | — | Белый список доменов (exact) |
 | `allowed_domain_patterns` | list[string] | — | Белый список доменов (regex) |
@@ -60,8 +61,8 @@
 | `enable_caching` | boolean | `true` | Включение кеширования |
 | `behind_nginx` | boolean | `true` | Squid за nginx |
 | `squid_local_port` | integer | `3128` | Локальный порт Squid (за nginx) |
-| `enable_keepalived` | boolean | `true` | Включение Keepalived |
-| `keepalived_vip` | string (IPv4) | `1.2.3.4` | Виртуальный IP |
+| `enable_keepalived` | boolean | `false` | Включение Keepalived |
+| `keepalived_vip` | string (IPv4) | Не задан; `192.0.2.10` в образце | Виртуальный IP при включённом VRRP |
 | `keepalived_vrid` | integer | `51` | VRRP Router ID |
 | `keepalived_auth_pass` | string | — | Пароль VRRP |
 
@@ -78,7 +79,7 @@
 | Параметр | Тип | Значение по умолчанию | Описание |
 |---|---|---|---|
 | `proxy_role` | string | `upstream` | Роль прокси |
-| `squid_port` | integer | `80` | Порт Squid (напрямую, без nginx) |
+| `squid_port` | integer | `443` в образце | Внешняя точка upstream: TLS Squid либо nginx; локальный Squid за nginx — 3128 |
 | `enable_auth` | boolean | `false` | Аутентификация отключена |
 | `enable_logging` | boolean | `false` | Журналирование отключено |
 | `enable_caching` | boolean | `false` | Кеширование отключено |

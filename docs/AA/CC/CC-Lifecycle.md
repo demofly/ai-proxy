@@ -28,7 +28,7 @@
 | [ADL](../ADL.md) | Реестр слоя | verified | 2026-08-29 | ADR-000001, ADR-000002, ADR-000003, ADR-000004, ADR-000005, ADR-000006, ADR-000007, ADR-000008 |
 | [ARR](../ARR.md) | Реестр слоя | verified | 2026-08-29 | ADR-000001, C2-CN-001, ADR-000003, C2-CN-002, C4-PB-002, C2-NF-002, C4-TM-001, C2-FR-001 |
 | [C1-BR](../C1-BR.md) | Реестр слоя | verified | 2026-08-29 | C1-BC-001, C1-BC-002, C1-BC-003, C1-BC-004 |
-| [C2-PR](../C2-PR.md) | Реестр слоя | verified | 2026-08-29 | C2-FR-001, C1-BC-001, C1-BC-003, C2-FR-002, C1-BC-002, C2-FR-003, C2-FR-004, C2-FR-005 |
+| [C2-PR](../C2-PR.md) | Реестр слоя | verified | 2026-10-18 | C2-FR-001, C1-BC-001, C1-BC-003, C2-FR-002, C1-BC-002, C2-FR-003, C2-FR-004, C2-FR-005 |
 | [C3-CR](../C3-CR.md) | Реестр слоя | verified | 2026-08-29 | C3-SA-001, C2-FR-001, C2-FR-002, C2-FR-003, C2-FR-004, C2-FR-005, C2-NF-001, C2-NF-003 |
 | [C4-SR](../C4-SR.md) | Реестр слоя | verified | 2026-08-29 | C4-PB-001, C3-AD-001, C4-PB-002, C4-TM-001, C3-SA-001, C4-TM-002, C3-SU-001, C4-TM-003 |
 | [DD](../DD.md) | Реестр слоя | verified | 2026-08-29 | -- |
@@ -55,7 +55,7 @@
 | [C2-FR-004](../C2/C2-FR-004.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-001, C3-SA-001 |
 | [C2-FR-005](../C2/C2-FR-005.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-002, C1-BC-004, C3-SA-001, C3-CS-001 |
 | [C2-FR-006](../C2/C2-FR-006.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-001, C1-BC-003, C3-MT-001, C3-NX-001 |
-| [C2-FR-007](../C2/C2-FR-007.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-002, C3-AD-001 |
+| [C2-FR-007](../C2/C2-FR-007.md) | Детальный C2 | verified | 2026-10-18 | C1-BC-002, C3-AD-001 |
 | [C2-FR-008](../C2/C2-FR-008.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-004, C1-BC-002, C3-AD-001 |
 | [C2-META](../C2/C2-META.md) | Детальный C2 | verified | 2026-08-29 | C2-FR-001, C2-FR-002, C2-FR-003, C2-FR-004, C2-FR-005, C2-FR-006, C2-FR-007, C2-FR-008 |
 | [C2-NF-001](../C2/C2-NF-001.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-004, C3-KA-001, C3-SA-001, C3-SU-001, C3-DN-001, ADR-000006 |
@@ -68,7 +68,7 @@
 
 | Артефакт | Тип | Статус | Дата | Зависимости |
 |---|---|---|---|---|
-| [C3-AD-001](../C3/C3-AD-001.md) | Детальный C3 | verified | 2026-08-29 | C2-FR-007, C2-FR-008, C2-NF-004, ADR-000007, C2-CN-001, C4-PB-001, C4-PB-002 |
+| [C3-AD-001](../C3/C3-AD-001.md) | Детальный C3 | verified | 2026-10-18 | C2-FR-007, C2-FR-008, C2-NF-004, ADR-000007, C2-CN-001, C4-PB-001, C4-PB-002 |
 | [C3-CS-001](../C3/C3-CS-001.md) | Детальный C3 | verified | 2026-08-29 | C2-FR-005, C2-NF-002, C2-CN-002, C2-NF-005, ADR-000004, C2-CN-001, C4-RL-001 |
 | [C3-DN-001](../C3/C3-DN-001.md) | Детальный C3 | verified | 2026-08-29 | C2-NF-003, C2-NF-001, C2-CN-001, C4-RL-004, ADR-000009 |
 | [C3-KA-001](../C3/C3-KA-001.md) | Детальный C3 | verified | 2026-08-29 | C2-NF-001, C2-NF-005, ADR-000006, C2-CN-001, C4-TM-003, C4-TM-005, C4-PB-001 |
@@ -81,7 +81,7 @@
 
 | Артефакт | Тип | Статус | Дата | Зависимости |
 |---|---|---|---|---|
-| [C4-PB-001](../C4/C4-PB-001.md) | Детальный C4 | verified | 2026-08-29 | C3-AD-001, C3-SA-001, C3-SU-001, C3-KA-001, C4-PB-002, C4-TM-001, C4-TM-002, C4-TM-003 |
+| [C4-PB-001](../C4/C4-PB-001.md) | Детальный C4 | verified | 2026-10-18 | C3-AD-001, C3-SA-001, C3-SU-001, C3-KA-001, C4-PB-002, C4-TM-001, C4-TM-002, C4-TM-003 |
 | [C4-PB-002](../C4/C4-PB-002.md) | Детальный C4 | verified | 2026-08-29 | C3-AD-001, C4-PB-001 |
 | [C4-RL-001](../C4/C4-RL-001.md) | Детальный C4 | verified | 2026-08-29 | C3-CS-001, C4-PB-001 |
 | [C4-RL-002](../C4/C4-RL-002.md) | Детальный C4 | verified | 2026-08-29 | C3-NX-001, C4-PB-001, C4-TM-001, C4-RL-003 |
@@ -90,7 +90,7 @@
 | [C4-TM-001](../C4/C4-TM-001.md) | Детальный C4 | verified | 2026-08-29 | C3-SA-001, C4-PB-001, C4-PB-002, C4-TM-002 |
 | [C4-TM-002](../C4/C4-TM-002.md) | Детальный C4 | verified | 2026-08-29 | C3-SU-001, C4-PB-001, C4-TM-001, C4-TM-004 |
 | [C4-TM-003](../C4/C4-TM-003.md) | Детальный C4 | verified | 2026-08-29 | C3-KA-001, C4-PB-001, C4-PB-002 |
-| [C4-TM-004](../C4/C4-TM-004.md) | Детальный C4 | verified | 2026-08-29 | C3-SU-001, C4-PB-001, C4-TM-002 |
+| [C4-TM-004](../C4/C4-TM-004.md) | Детальный C4 | verified | 2026-10-18 | C3-SU-001, C4-PB-001, C4-TM-002 |
 | [C4-TM-005](../C4/C4-TM-005.md) | Детальный C4 | verified | 2026-08-29 | C3-KA-001, C4-PB-001, C4-TM-003, C4-TM-001 |
 | [C4-TM-006](../C4/C4-TM-006.md) | Детальный C4 | verified | 2026-08-29 | C3-SU-001, C4-PB-001, C4-TM-004, C4-TM-002, C4-RL-004 |
 
@@ -128,19 +128,19 @@
 | [DD-CDM](../DD/DD-CDM.md) | Модель DD | verified | 2026-08-29 | -- |
 | [DD-Catalog](../DD/DD-Catalog.md) | Модель DD | verified | 2026-08-29 | -- |
 | [DD-Glossary](../DD/DD-Glossary.md) | Модель DD | verified | 2026-08-29 | -- |
-| [DD-Governance](../DD/DD-Governance.md) | Модель DD | verified | 2026-08-29 | -- |
+| [DD-Governance](../DD/DD-Governance.md) | Модель DD | verified | 2026-10-18 | -- |
 | [DD-Integration](../DD/DD-Integration.md) | Модель DD | verified | 2026-08-29 | -- |
 | [DD-LDM](../DD/DD-LDM.md) | Модель DD | verified | 2026-08-29 | -- |
 | [DD-Lifecycle](../DD/DD-Lifecycle.md) | Модель DD | verified | 2026-08-29 | -- |
 | [DD-Migration](../DD/DD-Migration.md) | Модель DD | verified | 2026-08-29 | -- |
 | [DD-PDM](../DD/DD-PDM.md) | Модель DD | verified | 2026-08-29 | -- |
-| [DD-Quality](../DD/DD-Quality.md) | Модель DD | verified | 2026-08-29 | -- |
+| [DD-Quality](../DD/DD-Quality.md) | Модель DD | verified | 2026-10-18 | -- |
 | [DD-Security](../DD/DD-Security.md) | Модель DD | verified | 2026-08-29 | -- |
-| [DD-SourceMap](../DD/DD-SourceMap.md) | Модель DD | verified | 2026-08-29 | -- |
+| [DD-SourceMap](../DD/DD-SourceMap.md) | Модель DD | verified | 2026-10-18 | -- |
 | [DE-AC-001](../DD/DE/DE-AC-001.md) | Сущность данных | verified | 2026-08-29 | -- |
 | [DE-BD-001](../DD/DE/DE-BD-001.md) | Сущность данных | verified | 2026-08-29 | -- |
 | [DE-CA-001](../DD/DE/DE-CA-001.md) | Сущность данных | verified | 2026-08-29 | -- |
-| [DE-CF-001](../DD/DE/DE-CF-001.md) | Сущность данных | verified | 2026-08-29 | -- |
+| [DE-CF-001](../DD/DE/DE-CF-001.md) | Сущность данных | verified | 2026-10-18 | -- |
 | [DE-CR-001](../DD/DE/DE-CR-001.md) | Сущность данных | verified | 2026-08-29 | -- |
 | [DE-DM-001](../DD/DE/DE-DM-001.md) | Сущность данных | verified | 2026-08-29 | -- |
 | [DE-LG-001](../DD/DE/DE-LG-001.md) | Сущность данных | verified | 2026-08-29 | -- |
@@ -153,7 +153,7 @@
 | Артефакт | Тип | Статус | Дата | Зависимости |
 |---|---|---|---|---|
 | [CC-CM](CC-CM.md) | Сквозной объект | verified | 2026-08-29 | -- |
-| [CC-Changes](CC-Changes.md) | Сквозной объект | verified | 2026-08-29 | C3-DN-001, C4-RL-004, ADR-000003, C3-MT-001, ADR-000008, C4-PB-001, ADR-000009, C4-TM-004 |
+| [CC-Changes](CC-Changes.md) | Сквозной объект | verified | 2026-10-18 | C3-DN-001, C4-RL-004, ADR-000003, C3-MT-001, ADR-000008, C4-PB-001, ADR-000009, C4-TM-004 |
 | [CC-Lifecycle](CC-Lifecycle.md) | Сквозной объект | verified | 2026-08-29 | ADR-000001, ADR-000002, ADR-000003, ADR-000004, ADR-000005, ADR-000006, ADR-000007, ADR-000008 |
 | [CC-RACI](CC-RACI.md) | Сквозной объект | verified | 2026-08-29 | -- |
 | [CC-Risks](CC-Risks.md) | Сквозной объект | verified | 2026-08-29 | C2-CN-001, C2-NF-002, C3-SA-001, C3-SU-001, C3-KA-001, C2-NF-001, C3-CS-001, C3-AD-001 |

@@ -1,7 +1,7 @@
 <!-- [AIGD] -->
 # DD-Quality — Правила качества данных
 
-**Последняя правка AI:** 2026-08-29T05:48:58Z
+**Последняя правка AI:** 2026-10-18
 
 ## Описание
 
@@ -16,7 +16,7 @@
 | Все обязательные параметры inventory.yml должны быть заданы | [DE-CF-001](DE/DE-CF-001.md) | 100% | Ansible playbook: undefined variable → fatal error |
 | Каждый access-прокси хост имеет `ansible_host`, `keepalived_state`, `keepalived_priority` | [DE-CF-001](DE/DE-CF-001.md) | 100% | Ansible template rendering |
 | Каждый upstream хост имеет `ansible_host` | [DE-CF-001](DE/DE-CF-001.md) | 100% | Ansible template rendering |
-| Хотя бы один домен в `allowed_domains` или `allowed_domain_patterns` | [DE-DM-001](DE/DE-DM-001.md) | >= 1 | Ansible assert / Squid startup |
+| Доменные ACL согласованы с намерением владельца | [DE-DM-001](DE/DE-DM-001.md) | Пустые оба списка означают отсутствие ограничения по доменам | Сверка inventory и отрисованной конфигурации Squid |
 | Файл passwd содержит хотя бы одну учётную запись (если `enable_auth: true`) | [DE-CR-001](DE/DE-CR-001.md) | >= 1 | `assert` в плейбуке: файл рабочего каталога читается до развёртывания, строки комментариев и пустые отбрасываются; пустой файл останавливает работу |
 
 ### 2. Валидность (Validity)
@@ -25,7 +25,7 @@
 |---|---|---|---|
 | Паттерны `allowed_domain_patterns` — валидные регулярные выражения | [DE-DM-001](DE/DE-DM-001.md) | 100% | Squid startup (syntax check) |
 | IP-адреса в `ansible_host` — валидные IPv4 | [DE-CF-001](DE/DE-CF-001.md) | 100% | **Не проверяется**: фильтр проверки адресов в коде не применяется; ошибка обнаружится отказом подключения |
-| `mtproxy_secret` — шестнадцатеричная строка нужной длины | [DE-SC-001](DE/DE-SC-001.md) | 100% | Косвенно: при порождении секрет выдаёт сам mtg, при заданном вручную проверки нет — ошибка обнаружится отказом службы |
+| `mtproxy_secret` — шестнадцатеричная строка нужной длины | [DE-SC-001](DE/DE-SC-001.md) | 100% | Кластерный preflight `tasks/mtproxy-cluster.yml` и фильтры MTProxy проверяют формат, общий секрет и соответствие fake-TLS-домена |
 | `keepalived_vrid` — целое в диапазоне 1–255 | [DE-CF-001](DE/DE-CF-001.md) | 100% | **Не проверяется**: ошибка обнаружится отказом запуска Keepalived |
 | Порты (`squid_port`, `mtproxy_local_port`) — целые в диапазоне 1–65535 | [DE-CF-001](DE/DE-CF-001.md) | 100% | Косвенно, проверкой конфигурации службы (`squid -k parse`); отдельной проверки диапазона нет |
 

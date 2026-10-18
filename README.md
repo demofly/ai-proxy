@@ -14,7 +14,12 @@
 ## Быстрый старт
 
 1. **Развёртывание серверов** — [Servers/deploy/README.md](Servers/deploy/README.md)
-2. **Настройка клиентов** — [Clients/README.md](Clients/README.md)
+2. **Настройка клиентов и JSON** — [Clients/README.md](Clients/README.md)
+3. **FoxyProxy: импорт, слияние и происхождение правил** — [Clients/FoxyProxy/README.md](Clients/FoxyProxy/README.md)
+4. **Эксплуатация** — [руководство пользователя](docs/user/user-guide/README.md) и [администратора](docs/user/administrator-guide/README.md)
+
+Клиентские файлы содержат заполнители. Ansible не подставляет в них реквизиты.
+Каталог FoxyProxy управляет маршрутом браузера; серверные ACL Squid задаются отдельно в inventory.
 
 ## Архитектура
 
