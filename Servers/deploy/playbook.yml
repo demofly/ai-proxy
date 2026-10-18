@@ -1019,40 +1019,25 @@
     # Встроенная ротация Squid выключена намеренно (logfile_rotate 0) с пояснением
     # «управляется системой», но правило для системного механизма проект не клал:
     # действовало ли что-либо, зависело от поставки пакета и на узле не проверялось.
-    # Кладём собственное правило. Имя файла отлично от squid, чтобы правило поставки
-    # (если оно есть) осталось на месте и было видно рядом, а не молча заменено.
+    # Заменяем правило поставки: два файла с одним glob дают duplicate log entry
+    # и останавливают ротацию Squid. Старое squid-aiproxy снимается при миграции.
     #
     # copytruncate, а не создание нового файла: Squid держит журнал открытым и без
     # переоткрытия продолжал бы писать в переименованный. Штатный сигнал переоткрытия
     # (squid -k rotate) сцеплен с внутренним счётчиком ротаций, отключённым здесь.
-    - name: Deploy logrotate rule for Squid logs
-      ansible.builtin.copy:
-        dest: /etc/logrotate.d/squid-aiproxy
-        owner: root
-        group: root
-        mode: '0644'
-        content: |
-          # Managed by Ansible - DO NOT EDIT MANUALLY
-          /var/log/squid/*.log {
-              {{ squid_log_rotate_period | default('daily') }}
-              rotate {{ squid_log_rotate_keep | default(14) }}
-              compress
-              delaycompress
-              missingok
-              notifempty
-              copytruncate
-              su proxy proxy
-              create 0640 proxy proxy
-          }
-      when: enable_logging | default(true) | bool
-
-    # Выключенное журналирование снимает и правило: иначе оно осталось бы работать
-    # над каталогом, который проект очищает как ненужный.
-    - name: Remove logrotate rule when logging is disabled
+    - name: Remove the obsolete duplicate Squid logrotate rule
       ansible.builtin.file:
         path: /etc/logrotate.d/squid-aiproxy
         state: absent
-      when: not (enable_logging | default(true) | bool)
+
+    - name: Deploy logrotate rule for Squid logs
+      ansible.builtin.template:
+        src: templates/logrotate-squid.j2
+        dest: /etc/logrotate.d/squid
+        owner: root
+        group: root
+        mode: '0644'
+      when: enable_logging | default(true) | bool
 
     # ===========================================================================
     # Phase: Firewall (upstream only)
