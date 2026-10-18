@@ -8,9 +8,9 @@ import yaml
 
 DEPLOY = Path(__file__).resolve().parents[1]
 ROLE = yaml.safe_load((DEPLOY/'roles/crowdsec/tasks/main.yml').read_text())
-START = next(i for i, task in enumerate(ROLE) if task.get('name') == 'Read CrowdSec base configuration')
+START = next(i for i, task in enumerate(ROLE) if task.get('name') == 'Прочитать базовую конфигурацию CrowdSec')
 TASKS = ROLE[START:START+5]
-assert TASKS[-1]['name'] == 'Bound the CrowdSec SQLite pool without replacing other local settings'
+assert TASKS[-1]['name'] == 'Ограничить пул SQLite CrowdSec с сохранением остальных настроек'
 
 
 def main():
@@ -33,7 +33,7 @@ def main():
                 local.write_text(yaml.safe_dump(original))
             tasks = yaml.safe_load(yaml.safe_dump(TASKS).replace('/etc/crowdsec/config.yaml', str(base)))
             fixture.write_text(yaml.safe_dump([dict(hosts='localhost', gather_facts=False,
-                tasks=tasks, handlers=[{'name':'Restart crowdsec', 'ansible.builtin.debug':
+                tasks=tasks, handlers=[{'name':'Перезапустить CrowdSec', 'ansible.builtin.debug':
                                       {'msg':'Fixture: restart notification received'}}])]))
             outputs = []
             for _ in range(2):

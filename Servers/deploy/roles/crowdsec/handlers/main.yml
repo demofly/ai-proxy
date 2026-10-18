@@ -1,10 +1,10 @@
 ---
-- name: Restart crowdsec
+- name: "Перезапустить CrowdSec"
   ansible.builtin.systemd:
     name: crowdsec
     state: restarted
 
-- name: Restart crowdsec-firewall-bouncer
+- name: "Перезапустить bouncer CrowdSec"
   ansible.builtin.systemd:
     name: crowdsec-firewall-bouncer
     state: restarted

@@ -9,19 +9,19 @@ import yaml
 DEPLOY = Path(__file__).resolve().parents[1]
 PLAY = yaml.safe_load((DEPLOY/'playbook.yml').read_text())[0]
 NAMES = {
-    'Resolve inventory resource defaults without masking inventory values',
-    'Calculate resource limits', 'Validate host resource shares',
-    'Calculate the system and foreign memory reserve',
-    'Identify enabled services and fixed memory limits',
-    'Calculate minimum service memory requirements',
-    'Calculate the host-derived project ceiling',
-    'Calculate allocatable memory without exceeding physical RAM',
-    'Calculate per-service memory limits', 'Bound workers by the service memory budget',
-    'Distribute the project budget across enabled services',
-    'Validate worker counts and nginx connections against memory',
-    'Sum planned memory limits for services deployed on this host',
-    'Assert memory plan fits the node',
-    'Report the whole-node memory plan',
+    'Определить параметры ресурсов с учётом inventory',
+    'Рассчитать системные пределы ресурсов', 'Проверить доли памяти и резервы узла',
+    'Рассчитать резерв памяти ОС и соседних приложений',
+    'Определить включённые службы и фиксированные пределы памяти',
+    'Рассчитать минимальную потребность служб в памяти',
+    'Рассчитать потолок памяти проекта по RAM узла',
+    'Рассчитать доступную память с учётом физических ограничений',
+    'Рассчитать пределы памяти каждой службы', 'Ограничить число рабочих процессов бюджетом памяти',
+    'Распределить бюджет памяти между включёнными службами',
+    'Проверить число рабочих процессов и соединений по бюджету памяти',
+    'Подсчитать сумму пределов памяти служб узла',
+    'Проверить размещение плана памяти на узле',
+    'Показать полный план памяти узла',
 }
 TASKS = [t for t in PLAY['pre_tasks'] if t.get('name') in NAMES]
 assert len(TASKS) == len(NAMES)

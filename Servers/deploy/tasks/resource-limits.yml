@@ -2,7 +2,7 @@
 # Run after application configuration has been validated/applied. Existing PIDs
 # enter Slice on their next normal restart. Until then, the sum of their live
 # MemoryMax caps enforces the same total without disconnecting shared nginx.
-- name: Assemble the complete managed service budget
+- name: "Собрать полный бюджет управляемых служб"
   ansible.builtin.set_fact:
     _proxy_resource_units: >-
       {{ [{'name': 'squid.service', 'memory_mb': mem_squid_mb},
@@ -15,21 +15,23 @@
           + ([{'name': 'crowdsec.service', 'memory_mb': mem_crowdsec_mb},
               {'name': 'crowdsec-firewall-bouncer.service', 'memory_mb': mem_crowdsec_bouncer_mb}] if crowdsec_enabled | default(false) | bool else []) }}
 
-- name: Validate the enforced service list against the preflight plan
+- name: "Сверить управляемые службы с предварительным планом"
   ansible.builtin.assert:
     that:
       - _proxy_resource_units | map(attribute='memory_mb') | map('int') | sum == mem_planned_mb | int
       - mem_planned_mb | int <= _proxy_budget.mb | int
       - _proxy_budget.bytes | int <= [ansible_memtotal_mb | int * 1048576 // 3, _proxy_minimum_plan.minimum_mb | int * 1048576] | max
       - _proxy_budget.bytes | int <= 1000000000
+    fail_msg: 'Список управляемых служб или сумма их пределов памяти расходится с предварительным планом и потолком проекта.'
+    success_msg: 'Управляемые службы и пределы памяти соответствуют предварительному плану.'
 
-- name: Deploy the aggregate project memory limit
+- name: "Разместить общий предел памяти проекта"
   ansible.builtin.template:
     src: '{{ playbook_dir }}/templates/aiproxy.slice.j2'
     dest: /etc/systemd/system/aiproxy.slice
     mode: '0644'
 
-- name: Create managed service resource override directories
+- name: "Создать каталоги переопределений ресурсов управляемых служб"
   ansible.builtin.file:
     path: '/etc/systemd/system/{{ item.name }}.d'
     state: directory
@@ -38,7 +40,7 @@
   loop_control:
     label: '{{ item.name }}'
 
-- name: Enforce complete service limits and recovery after OOM
+- name: "Применить пределы служб и восстановление после OOM"
   ansible.builtin.copy:
     dest: '/etc/systemd/system/{{ item.name }}.d/zz-aiproxy-resources.conf'
     mode: '0644'
@@ -62,11 +64,11 @@
   loop_control:
     label: '{{ item.name }}'
 
-- name: Load the aggregate and individual resource limits
+- name: "Загрузить общие и индивидуальные пределы ресурсов"
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: Read actual cgroup placement
+- name: "Получить фактическое размещение служб в cgroup"
   ansible.builtin.command:
     argv: [systemctl, show, '{{ item.name }}', --property=ControlGroup, --value]
   register: _proxy_cgroups
@@ -76,7 +78,7 @@
     label: '{{ item.name }}'
   when: not ansible_check_mode
 
-- name: Verify configured service caps and slice
+- name: "Проверить настроенные пределы служб и принадлежность к slice"
   ansible.builtin.command:
     argv: [systemctl, show, '{{ item.name }}', --property=ControlGroup, --property=MemoryMax, --property=Slice]
   register: _proxy_effective_limits
@@ -89,7 +91,7 @@
     label: '{{ item.name }}'
   when: not ansible_check_mode
 
-- name: Read live cgroup v2 memory caps (including services pending slice migration)
+- name: "Получить действующие пределы памяти cgroup v2 до завершения переноса служб"
   ansible.builtin.slurp:
     src: '/sys/fs/cgroup{{ item.stdout }}/memory.max'
   register: _proxy_live_cap

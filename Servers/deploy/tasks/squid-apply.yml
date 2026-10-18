@@ -1,25 +1,25 @@
 ---
 # Keep startup-only settings separate from live reconfiguration. The persistent
 # marker records the last successful start, even if another role wrote squid.conf.
-- name: Read newly rendered Squid startup parameters
+- name: "Прочитать новые параметры запуска Squid"
   ansible.builtin.command:
     argv: [grep, -E, '^(http_port|https_port|cache_dir|workers|max_filedescriptors)[[:space:]]', '{{ squid_config_path }}']
   register: _squid_startup_parameters
   changed_when: false
 
-- name: Create the deployment state directory
+- name: "Создать каталог состояния деплоймента"
   ansible.builtin.file:
     path: /var/lib/aiproxy
     state: directory
     mode: '0755'
 
-- name: Read last successfully applied Squid startup parameters
+- name: "Прочитать последние успешно применённые параметры запуска Squid"
   ansible.builtin.slurp:
     src: /var/lib/aiproxy/squid-startup-parameters
   register: _squid_previous_startup
   failed_when: false
 
-- name: Check all required cache trees before starting Squid
+- name: "Проверить необходимые каталоги кеша перед запуском Squid"
   ansible.builtin.stat:
     path: '{{ item }}'
   loop: >-
@@ -28,7 +28,7 @@
   register: _squid_cache_trees
   when: enable_caching | default(false) | bool
 
-- name: Determine whether Squid needs a fresh start
+- name: "Определить необходимость перезапуска Squid"
   ansible.builtin.set_fact:
     squid_restart_required: >-
       {{ (_squid_previous_startup.content | default('') | b64decode | trim)
@@ -39,20 +39,20 @@
       {{ squid_config_access.changed | default(false) or squid_config_upstream.changed | default(false)
          or _squid_config_deployed.changed | default(false) }}
 
-- name: Stop Squid before changing workers, FD tables, listeners or cache layout
+- name: "Остановить Squid перед изменением параметров запуска"
   ansible.builtin.systemd:
     name: squid
     state: stopped
   when: squid_restart_required | bool
 
-- name: Initialize cache trees while Squid is stopped
+- name: "Инициализировать каталоги кеша при остановленном Squid"
   ansible.builtin.command:
     argv: [squid, -N, -z]
   when:
     - enable_caching | default(false) | bool
     - _squid_cache_trees.results | selectattr('stat.exists', 'equalto', false) | list | length > 0
 
-- name: Wait for cache initialization to finish
+- name: "Дождаться завершения инициализации кеша"
   ansible.builtin.wait_for:
     path: '{{ item.item }}'
     state: present
@@ -63,18 +63,18 @@
     - item.stat is defined
     - not item.stat.exists
 
-- name: Clear stale Squid start-limit failures
+- name: "Сбросить прежние ошибки ограничения запусков Squid"
   ansible.builtin.command: systemctl reset-failed squid
   changed_when: false
   failed_when: false
 
-- name: Read Squid runtime state
+- name: "Получить текущее состояние Squid"
   ansible.builtin.command: systemctl is-active squid
   register: _squid_apply_state
   changed_when: false
   failed_when: false
 
-- name: Reload live-only changes without interrupting established tunnels
+- name: "Перечитать конфигурацию Squid с сохранением установленных туннелей"
   ansible.builtin.systemd:
     name: squid
     state: reloaded
@@ -83,13 +83,13 @@
     - _squid_config_changed | bool
     - _squid_apply_state.stdout == 'active'
 
-- name: Start the configured Squid instance
+- name: "Запустить настроенный Squid"
   ansible.builtin.systemd:
     name: squid
     state: started
     enabled: true
 
-- name: Verify local Squid readiness before recording the applied state
+- name: "Проверить локальную готовность Squid перед сохранением состояния"
   ansible.builtin.uri:
     url: 'http://127.0.0.1:{{ squid_mgmt_port | default(3129) }}/squid-internal-mgr/info'
     use_proxy: false
@@ -100,7 +100,7 @@
   retries: 5
   delay: 2
 
-- name: Record successfully applied Squid startup parameters
+- name: "Сохранить успешно применённые параметры запуска Squid"
   ansible.builtin.copy:
     dest: /var/lib/aiproxy/squid-startup-parameters
     content: '{{ _squid_startup_parameters.stdout | trim }}'

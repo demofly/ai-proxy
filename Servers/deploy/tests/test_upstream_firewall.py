@@ -73,8 +73,8 @@ class FirewallTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'posix', 'requires bash')
     def test_failed_restore_cannot_be_hidden_by_a_successful_followup(self):
         play = yaml.safe_load((DEPLOY/'playbook.yml').read_text())[0]
-        block = next(t['block'] for t in play['tasks'] if t.get('name') == 'Configure iptables for upstream proxy (custom chain)')
-        task = next(t for t in block if t.get('name') == 'Apply custom chain atomically (foreign chains untouched)')
+        block = next(t['block'] for t in play['tasks'] if t.get('name') == 'Настроить отдельную цепочку iptables на upstream')
+        task = next(t for t in block if t.get('name') == 'Атомарно применить отдельную цепочку с сохранением чужих правил')
         with tempfile.TemporaryDirectory(prefix='aiproxy-firewall-') as temp:
             root = Path(temp)
             for command in ('iptables','ip6tables'):

@@ -24,7 +24,7 @@
 # впервые» и «обновили версию» неразличимы — `changed` истинно в обоих случаях.
 # Наличие /etc/nginx/nginx.conf означает, что пакет на узле уже стоял, кем бы он
 # ни был поставлен: этим же проектом или соседним.
-- name: Check whether nginx was present before this run
+- name: "Проверить наличие nginx до установки пакета"
   ansible.builtin.stat:
     path: /etc/nginx/nginx.conf
   register: _nginx_present_before
@@ -42,7 +42,7 @@
 #     на паре access-нод под общим VIP не возникает.
 # Заморозить версию на узле совместного размещения: service_upgrades_enabled=false
 # в inventory (см. inventory.yml.sample).
-- name: Install nginx with stream module support
+- name: "Установить nginx с модулем stream"
   ansible.builtin.apt:
     name:
       - nginx
@@ -62,7 +62,7 @@
 # службу узла при каждой новой версии в репозитории — то есть роняла бы и
 # соседний проект, причём остановка была бы не следствием обновления, а нашим
 # собственным действием поверх него.
-- name: Stop nginx after fresh install (config not ready yet)
+- name: "Остановить новый nginx до подготовки конфигурации"
   ansible.builtin.systemd:
     name: nginx
     state: stopped
@@ -76,7 +76,7 @@
 # Каталоги создаются безусловно, независимо от того, положит ли в них файлы
 # сам ai-proxy: их существование и есть предоставляемый контракт узла.
 
-- name: Create nginx stream.d directory
+- name: "Создать каталог stream.d nginx"
   ansible.builtin.file:
     path: /etc/nginx/stream.d
     state: directory
@@ -84,7 +84,7 @@
     group: root
     mode: '0755'
 
-- name: Create SNI map fragment directory
+- name: "Создать каталог фрагментов карты SNI"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/sni-map.d
     state: directory
@@ -95,7 +95,7 @@
 # Точка расширения ВНУТРИ блока, слушающего порт 443: соседний проект кладёт сюда
 # директивы, которым нужно место в самом блоке (например, ограничение числа
 # соединений). Собственного блока на этом порту у соседа быть не может — порт один.
-- name: Create router extension directory for co-deployed projects
+- name: "Создать каталог расширений маршрутизатора для соседних проектов"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/router.d
     state: directory
@@ -104,7 +104,7 @@
     mode: '0755'
 
 # Точка расширения уровня http{}: виртуальные хосты соседних проектов.
-- name: Create nginx conf.d directory (http-level extension point)
+- name: "Создать каталог HTTP-фрагментов nginx"
   ansible.builtin.file:
     path: /etc/nginx/conf.d
     state: directory
@@ -113,7 +113,7 @@
     mode: '0755'
 
 # Migration: remove old blockinfile marker (pre-modular era)
-- name: "Migration: remove old stream block marker from nginx.conf"
+- name: "Удалить устаревший маркер блока stream из nginx.conf"
   ansible.builtin.blockinfile:
     path: /etc/nginx/nginx.conf
     marker: "# {mark} ANSIBLE MANAGED BLOCK - stream module"
@@ -122,7 +122,7 @@
 # Блок stream{} в nginx.conf с включением всего stream.d: единый маркер, чтобы
 # повторное развёртывание правило собственную запись, а не добавляло вторую.
 # Строка включения одна на каталог — сюда же попадают потоковые блоки соседей.
-- name: Ensure stream block exists in nginx.conf
+- name: "Добавить блок stream в nginx.conf"
   ansible.builtin.blockinfile:
     path: /etc/nginx/nginx.conf
     marker: "# {mark} ANSIBLE MANAGED - nginx stream block"
@@ -131,18 +131,18 @@
       stream {
           include /etc/nginx/stream.d/*.conf;
       }
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
 # Включение conf.d на уровне http{}: в пакете Debian оно есть по умолчанию, но
 # умолчание дистрибутива контрактом не является. Читаем nginx.conf, чтобы добавить
 # строку только при её отсутствии: вторая строка включения того же каталога дала бы
 # двойное объявление upstream и отказ конфигурации.
-- name: Read nginx.conf to check http-level include of conf.d
+- name: "Прочитать nginx.conf для проверки подключения HTTP-фрагментов"
   ansible.builtin.slurp:
     src: /etc/nginx/nginx.conf
   register: _nginx_conf_raw
 
-- name: Ensure http block includes conf.d fragments
+- name: "Подключить conf.d к блоку http nginx"
   ansible.builtin.blockinfile:
     path: /etc/nginx/nginx.conf
     marker: "    # {mark} ANSIBLE MANAGED - nginx http conf.d include"
@@ -155,7 +155,7 @@
     # Закомментированная строка включения контрактом не является, поэтому
     # признак — начало строки без символа комментария.
     - not (_nginx_conf_raw.content | b64decode is search('(?m)^\s*include\s+/etc/nginx/conf\.d/\*\.conf'))
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
 # Маршрутизатор SNI принадлежит ai-proxy как владельцу nginx на узле и
 # разворачивается безусловно: его редакция — единственная действующая.
@@ -172,79 +172,79 @@
 # Прежде эти строки не задавал никто из нашего проекта: при одиночном
 # размещении действовало умолчание поставки (768 на рабочий процесс),
 # при совместном их ставил сосед, выводя из числа СВОИХ пользователей.
-- name: Bound shared nginx workers by its service memory
+- name: "Ограничить число рабочих процессов общего nginx бюджетом памяти"
   ansible.builtin.lineinfile:
     path: /etc/nginx/nginx.conf
     regexp: '^worker_processes'
     line: "worker_processes {{ proxy_nginx_workers | default(1) }};"
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
-- name: Tune shared nginx worker_connections (owner of the node's nginx)
+- name: "Настроить worker_connections общего nginx"
   ansible.builtin.lineinfile:
     path: /etc/nginx/nginx.conf
     regexp: '^\s*worker_connections'
     line: "\tworker_connections {{ nginx_worker_connections | default(4096) }};"
     insertafter: '^\s*events\s*\{'
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
 # Предел дескрипторов рабочего процесса: соединение занимает два (клиентское
 # и к цели), плюс запас на файлы и сокеты службы. Без него предел процесса
 # остаётся системным и обрывает приём раньше, чем исчерпаются соединения.
-- name: Set shared nginx worker_rlimit_nofile (owner of the node's nginx)
+- name: "Настроить worker_rlimit_nofile общего nginx"
   ansible.builtin.lineinfile:
     path: /etc/nginx/nginx.conf
     regexp: '^\s*worker_rlimit_nofile'
     line: "worker_rlimit_nofile {{ nginx_worker_rlimit_nofile | default(fd_limit | default(65535)) }};"
     insertbefore: '^\s*events\s*\{'
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
-- name: Deploy ai-proxy transit capacity zone
+- name: "Разместить зону ограничения транзитных сессий ai-proxy"
   ansible.builtin.template:
     src: '{{ playbook_dir }}/templates/10-aiproxy-capacity.conf.j2'
     dest: /etc/nginx/stream.d/10-aiproxy-capacity.conf
     mode: '0644'
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
-- name: Deploy shared SNI router
+- name: "Разместить общий маршрутизатор SNI"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/00-sni-router.conf.j2"
     dest: /etc/nginx/stream.d/00-sni-router.conf
     owner: root
     group: root
     mode: '0644'
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
 # ===========================================================================
 # Migration: remove old monolithic config
 # ===========================================================================
 
-- name: "Migration: remove old monolithic stream config"
+- name: "Удалить устаревшую монолитную конфигурацию stream"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/mtproxy-squid.conf
     state: absent
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
 # ===========================================================================
 # Deploy project-specific stream configs
 # ===========================================================================
 
-- name: Deploy ai-proxy upstream definitions
+- name: "Разместить определения серверов ai-proxy"
   ansible.builtin.template:
     src: 10-aiproxy-upstreams.conf.j2
     dest: /etc/nginx/stream.d/10-aiproxy-upstreams.conf
     owner: root
     group: root
     mode: '0644'
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
-- name: Deploy ai-proxy SNI map entries
+- name: "Разместить записи ai-proxy в карте SNI"
   ansible.builtin.template:
     src: sni-map.d/aiproxy.conf.j2
     dest: /etc/nginx/stream.d/sni-map.d/aiproxy.conf
     owner: root
     group: root
     mode: '0644'
-  notify: Reload nginx
+  notify: "Перечитать конфигурацию nginx"
 
 # ===========================================================================
 # Squid reconfiguration with rollback (access nodes only)
@@ -253,17 +253,17 @@
 # Pending Reload handlers fire at end of play (harmless refresh).
 # ===========================================================================
 
-- name: Deploy nginx and reconfigure squid with rollback
+- name: "Настроить nginx и Squid с откатом при ошибке"
   when: proxy_role == 'access'
   block:
-    - name: Backup squid configuration
+    - name: "Сохранить резервную копию конфигурации Squid"
       ansible.builtin.copy:
         src: /etc/squid/squid.conf
         dest: /etc/squid/squid.conf.nginx-rollback
         remote_src: true
         mode: '0644'
 
-    - name: Deploy Squid config (behind nginx on localhost)
+    - name: "Разместить конфигурацию локального Squid за nginx"
       ansible.builtin.template:
         src: "{{ playbook_dir }}/templates/squid-access.conf.j2"
         dest: "{{ squid_config_path | default('/etc/squid/squid.conf') }}"
@@ -273,19 +273,19 @@
         validate: 'squid -k parse -f %s'
       register: _squid_config_deployed
 
-    - name: Test nginx configuration
+    - name: "Проверить конфигурацию nginx"
       ansible.builtin.command:
         cmd: nginx -t
       changed_when: false
 
-    - name: Check if squid is listening on port 443
+    - name: "Проверить наличие Squid на порту 443"
       ansible.builtin.shell:
         cmd: ss -tlnp 'sport = :443' | grep -q squid
       register: _squid_on_443
       failed_when: false
       changed_when: false
 
-    - name: Stop squid to release port 443 (main play initializes and starts it)
+    - name: "Остановить Squid для освобождения порта 443 до основного запуска"
       ansible.builtin.systemd:
         name: squid
         state: stopped
@@ -293,31 +293,31 @@
 
     # Main playbook applies Squid changes after startup-only parameters and
     # cache trees have been checked. Do not reload workers/cache layout here.
-    - name: Enable and start nginx
+    - name: "Включить автозапуск и запустить nginx"
       ansible.builtin.systemd:
         name: nginx
         state: started
         enabled: true
 
-    - name: Verify nginx is listening on port 443
+    - name: "Проверить доступность nginx на порту 443"
       ansible.builtin.wait_for:
         port: 443
         timeout: 10
 
   rescue:
-    - name: Rollback - restore squid configuration
+    - name: "Восстановить конфигурацию Squid при откате"
       ansible.builtin.copy:
         src: /etc/squid/squid.conf.nginx-rollback
         dest: /etc/squid/squid.conf
         remote_src: true
         mode: '0644'
 
-    - name: Rollback - restart squid
+    - name: "Перезапустить Squid при откате"
       ansible.builtin.systemd:
         name: squid
         state: restarted
 
-    - name: Fail deployment with rollback notification
+    - name: "Остановить деплоймент с сообщением об откате"
       ansible.builtin.fail:
         msg: >-
           Развёртывание маршрутизатора не удалось, Squid возвращён на порт 443
@@ -329,10 +329,10 @@
           предшествующих задач: отказавшая названа последней перед откатом.
 
 # ===========================================================================
-# Enable and start nginx (upstream nodes)
+# Включить автозапуск и запустить nginx на узлах upstream
 # ===========================================================================
 
-- name: Enable and start nginx (upstream nodes)
+- name: "Включить автозапуск и запустить nginx на узлах upstream"
   ansible.builtin.systemd:
     name: nginx
     state: started

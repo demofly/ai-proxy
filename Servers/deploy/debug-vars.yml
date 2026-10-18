@@ -1,23 +1,23 @@
 ---
-- name: Debug variables for access-01
+- name: "Проверить переменные узла access-01"
   hosts: access-01
   gather_facts: false
   tasks:
-    - name: Show proxy_role variable
+    - name: "Показать значение proxy_role"
       debug:
-        msg: "proxy_role = {{ proxy_role | default('UNDEFINED') }}"
+        msg: "Роль узла proxy_role: {{ proxy_role | default('не задана') }}"
 
-    - name: Show nginx_on_443 variable
+    - name: "Показать значение nginx_on_443"
       debug:
-        msg: "nginx_on_443 = {{ nginx_on_443 | default('UNDEFINED') }}"
+        msg: "Работа за nginx на порту 443 (nginx_on_443): {{ nginx_on_443 | default('не определено') }}"
 
-    - name: Show when condition result
+    - name: "Показать результат условия подключения nginx"
       debug:
-        msg: "Condition result: proxy_role='{{ proxy_role | default('UNDEFINED') }}' AND nginx_on_443={{ nginx_on_443 | default(false) | bool }}"
+        msg: "Условие подключения nginx: proxy_role='{{ proxy_role | default('не задана') }}' и nginx_on_443={{ nginx_on_443 | default(false) | bool }}"
 
-    - name: Test the exact when condition
+    - name: "Проверить условие подключения роли nginx"
       debug:
-        msg: "This task would run if the nginx role condition is true"
+        msg: "Условие подключения роли nginx выполнено."
       when:
         - proxy_role == 'access'
         - nginx_on_443 | default(false) | bool

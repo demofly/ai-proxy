@@ -1,24 +1,24 @@
 ---
-- name: Create the shared services contract directory
+- name: "Создать каталог правил общих служб"
   ansible.builtin.file:
     path: /etc/shared-host
     state: directory
     mode: '0755'
 
-- name: Initialize the persistent nftables child chain without replacing Matrix rules
+- name: "Создать постоянную дочернюю цепочку nftables с сохранением правил Matrix"
   ansible.builtin.copy:
     dest: /etc/shared-host/matrix-ports.nft
     content: "return\n"
     force: false
     mode: '0644'
 
-- name: Install the owner firewall integration for Matrix
+- name: "Установить интеграцию межсетевого экрана с Matrix"
   ansible.builtin.copy:
     src: scripts/apply-shared-ports.py
     dest: /usr/local/sbin/aiproxy-apply-shared-ports
     mode: '0755'
 
-- name: Restore shared iptables ports after the owner at boot
+- name: "Настроить восстановление общих портов iptables после загрузки правил владельца"
   ansible.builtin.copy:
     dest: /etc/systemd/system/aiproxy-shared-ports.service
     mode: '0644'
@@ -34,7 +34,7 @@
       [Install]
       WantedBy=multi-user.target
 
-- name: Enable persistent shared firewall rules
+- name: "Включить сохранённые правила межсетевого экрана для общих служб"
   ansible.builtin.systemd:
     name: aiproxy-shared-ports
     enabled: true

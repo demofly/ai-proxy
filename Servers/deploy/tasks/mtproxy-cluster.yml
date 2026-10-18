@@ -1,29 +1,31 @@
 ---
-- name: Identify enabled MTProxy backends
+- name: "Определить включённые серверы MTProxy"
   ansible.builtin.set_fact:
     _mtproxy_cluster_nodes: '{{ groups["upstreams"] | default([]) | mtproxy_nodes(hostvars) }}'
 
-- name: Require a backend for access nodes that enable MTProxy
+- name: "Проверить наличие сервера MTProxy для включённых access"
   ansible.builtin.assert:
     that: >-
       _mtproxy_cluster_nodes | length > 0 or
       (groups['access_proxies'] | default([]) | mtproxy_nodes(hostvars) | length == 0)
-    fail_msg: MTProxy is enabled on access nodes but no enabled upstream backend exists.
+    fail_msg: MTProxy включён на access, но ни одного включённого сервера upstream нет.
+    success_msg: Для включённых access есть сервер MTProxy либо MTProxy отключён.
 
-- name: Resolve one credential for the load-balanced MTProxy service
+- name: "Определить единый секрет балансируемого MTProxy"
   when: _mtproxy_cluster_nodes | length > 0
   block:
-    - name: Validate the explicit cluster settings before reading legacy files
+    - name: "Проверить явные настройки кластера до чтения прежних файлов"
       ansible.builtin.set_fact:
         _mtproxy_requested_plan: '{{ _mtproxy_cluster_nodes | mtproxy_cluster_plan(hostvars, []) }}'
       no_log: true
 
-    - name: Require consistent MTProxy settings across enabled backends
+    - name: "Проверить согласованность настроек включённых серверов MTProxy"
       ansible.builtin.assert:
         that: _mtproxy_requested_plan.error | length == 0
         fail_msg: '{{ _mtproxy_requested_plan.error }}'
+        success_msg: 'Явные настройки включённых серверов MTProxy согласованы.'
 
-    - name: Inspect existing MTProxy credential files
+    - name: "Проверить наличие файлов с существующими секретами MTProxy"
       ansible.builtin.stat:
         path: '/etc/mtproxy/{{ item.1 }}'
       delegate_to: '{{ item.0 }}'
@@ -32,7 +34,7 @@
       when: _mtproxy_requested_plan.secret | length == 0
       no_log: true
 
-    - name: Read existing MTProxy credential files
+    - name: "Прочитать файлы с существующими секретами MTProxy"
       ansible.builtin.slurp:
         src: '{{ item.stat.path }}'
       delegate_to: '{{ item.item.0 }}'
@@ -43,17 +45,18 @@
       register: _mtproxy_cluster_reads
       no_log: true
 
-    - name: Determine whether MTProxy credentials can be preserved safely
+    - name: "Определить возможность сохранения существующего секрета MTProxy"
       ansible.builtin.set_fact:
         _mtproxy_cluster_plan: '{{ _mtproxy_cluster_nodes | mtproxy_cluster_plan(hostvars, _mtproxy_cluster_reads.results) }}'
       no_log: true
 
-    - name: Reject ambiguous MTProxy credentials before changing services
+    - name: "Проверить однозначность секрета MTProxy до изменения служб"
       ansible.builtin.assert:
         that: _mtproxy_cluster_plan.error | length == 0
         fail_msg: '{{ _mtproxy_cluster_plan.error }}'
+        success_msg: 'Общий секрет MTProxy определён однозначно; существующие реквизиты сохранены либо запланирована явная ротация или начальная генерация.'
 
-    - name: Create the private controller directory for initial cluster credentials
+    - name: "Создать закрытый каталог начального секрета на управляющей машине"
       ansible.builtin.file:
         path: '{{ playbook_dir }}/secrets'
         state: directory
@@ -62,7 +65,7 @@
       become: false
       when: _mtproxy_cluster_plan.secret | length == 0
 
-    - name: Publish the common MTProxy secret to all hosts in this run
+    - name: "Передать единый секрет MTProxy всем узлам текущего прогона"
       ansible.builtin.set_fact:
         _mtproxy_cluster_secret: >-
           {{ _mtproxy_cluster_plan.secret if _mtproxy_cluster_plan.secret | length > 0 else

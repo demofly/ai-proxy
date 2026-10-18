@@ -16,7 +16,7 @@
 # впервые» и «обновили версию» неразличимы — `changed` истинно в обоих случаях.
 # Наличие /etc/nginx/nginx.conf означает, что пакет на узле уже стоял, кем бы он
 # ни был поставлен: этим же проектом или соседним.
-- name: Check whether nginx was present before this run (upstream)
+- name: "Проверить наличие nginx до установки пакета на upstream"
   ansible.builtin.stat:
     path: /etc/nginx/nginx.conf
   register: _nginx_present_before
@@ -29,7 +29,7 @@
 # конфигурация обоих проектов лежит на диске до обновления, поэтому служба
 # поднимается сразу в рабочем виде. `throttle: 1` не даёт разрыву совпасть на
 # нескольких узлах. Заморозить версию: service_upgrades_enabled=false в inventory.
-- name: Install nginx with stream module support (upstream)
+- name: "Установить nginx с модулем stream на upstream"
   ansible.builtin.apt:
     name:
       - nginx
@@ -51,7 +51,7 @@
 # соседний проект, причём остановка была бы не следствием обновления, а нашим
 # собственным действием поверх него. Симметричная правка сделана и в роли nginx:
 # исправление в одном месте оставило бы дефект на upstream-узлах.
-- name: Stop nginx after fresh install (config not ready yet)
+- name: "Остановить новый nginx до подготовки конфигурации"
   ansible.builtin.systemd:
     name: nginx
     state: stopped
@@ -59,7 +59,7 @@
     - nginx_installed.changed
     - not _nginx_present_before.stat.exists
 
-- name: Create nginx stream.d directory (upstream)
+- name: "Создать каталог stream.d nginx на upstream"
   ansible.builtin.file:
     path: /etc/nginx/stream.d
     state: directory
@@ -67,7 +67,7 @@
     group: root
     mode: '0755'
 
-- name: Create SNI map fragment directory (upstream)
+- name: "Создать каталог фрагментов карты SNI на upstream"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/sni-map.d
     state: directory
@@ -78,7 +78,7 @@
 # Точка расширения ВНУТРИ блока, слушающего порт 443: соседний проект кладёт сюда
 # директивы, которым нужно место в самом блоке (например, ограничение числа
 # соединений). Собственного блока на этом порту у соседа быть не может — порт один.
-- name: Create router extension directory for co-deployed projects (upstream)
+- name: "Создать каталог расширений маршрутизатора для соседних проектов на upstream"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/router.d
     state: directory
@@ -89,7 +89,7 @@
 # Точка расширения уровня http{}: виртуальные хосты соседних проектов.
 # Каталог создаётся независимо от того, кладёт ли в него файлы сам ai-proxy:
 # его существование и есть предоставляемый контракт узла.
-- name: Create nginx conf.d directory (http-level extension point, upstream)
+- name: "Создать каталог HTTP-фрагментов nginx на upstream"
   ansible.builtin.file:
     path: /etc/nginx/conf.d
     state: directory
@@ -100,7 +100,7 @@
 # Блок stream{} в nginx.conf с включением всего stream.d: единый маркер, чтобы
 # повторное развёртывание правило собственную запись, а не добавляло вторую.
 # Строка включения одна на каталог — сюда же попадают потоковые блоки соседей.
-- name: Ensure stream block exists in nginx.conf (upstream)
+- name: "Добавить блок stream в nginx.conf на upstream"
   ansible.builtin.blockinfile:
     path: /etc/nginx/nginx.conf
     marker: "# {mark} ANSIBLE MANAGED - nginx stream block"
@@ -109,18 +109,18 @@
       stream {
           include /etc/nginx/stream.d/*.conf;
       }
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Включение conf.d на уровне http{}: в пакете Debian оно есть по умолчанию, но
 # умолчание дистрибутива контрактом не является. Читаем nginx.conf, чтобы добавить
 # строку только при её отсутствии: вторая строка включения того же каталога дала бы
 # двойное объявление upstream и отказ конфигурации.
-- name: Read nginx.conf to check http-level include of conf.d (upstream)
+- name: "Прочитать nginx.conf для проверки подключения HTTP-фрагментов на upstream"
   ansible.builtin.slurp:
     src: /etc/nginx/nginx.conf
   register: _nginx_conf_raw
 
-- name: Ensure http block includes conf.d fragments (upstream)
+- name: "Подключить conf.d к блоку http nginx на upstream"
   ansible.builtin.blockinfile:
     path: /etc/nginx/nginx.conf
     marker: "    # {mark} ANSIBLE MANAGED - nginx http conf.d include"
@@ -133,32 +133,32 @@
     # Закомментированная строка включения контрактом не является, поэтому
     # признак — начало строки без символа комментария.
     - not (_nginx_conf_raw.content | b64decode is search('(?m)^\s*include\s+/etc/nginx/conf\.d/\*\.conf'))
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Маршрутизатор SNI принадлежит ai-proxy как владельцу nginx на узле и
 # разворачивается безусловно: его редакция — единственная действующая.
 # Расширяют его соседи не правкой файла, а своими фрагментами в sni-map.d.
-- name: Deploy ai-proxy transit capacity zone (upstream)
+- name: "Разместить зону ограничения транзитных сессий ai-proxy на upstream"
   ansible.builtin.template:
     src: '{{ playbook_dir }}/templates/10-aiproxy-capacity.conf.j2'
     dest: /etc/nginx/stream.d/10-aiproxy-capacity.conf
     mode: '0644'
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
-- name: Deploy shared SNI router (upstream)
+- name: "Разместить общий маршрутизатор SNI на upstream"
   ansible.builtin.template:
     src: "{{ playbook_dir }}/templates/00-sni-router.conf.j2"
     dest: /etc/nginx/stream.d/00-sni-router.conf
     owner: root
     group: root
     mode: '0644'
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # ===========================================================================
 # TLS certificate for access → upstream transit encryption
 # ===========================================================================
 
-- name: Create nginx SSL directory
+- name: "Создать каталог TLS-материала nginx"
   ansible.builtin.file:
     path: /etc/nginx/ssl
     state: directory
@@ -166,7 +166,7 @@
     group: root
     mode: '0700'
 
-- name: Generate self-signed TLS certificate for MTProxy transit
+- name: "Выпустить самоподписанный TLS-сертификат участка MTProxy"
   ansible.builtin.command:
     cmd: >
       openssl req -x509
@@ -178,7 +178,7 @@
   args:
     creates: /etc/nginx/ssl/mtproxy.crt
 
-- name: Set permissions on TLS key
+- name: "Ограничить доступ к приватному TLS-ключу"
   ansible.builtin.file:
     path: /etc/nginx/ssl/mtproxy.key
     owner: root
@@ -192,42 +192,42 @@
 # ===========================================================================
 
 # Migration: remove old monolithic config (pre co-deployment era)
-- name: "Migration: remove old mtproxy-tls.conf"
+- name: "Удалить устаревшую конфигурацию mtproxy-tls.conf"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/mtproxy-tls.conf
     state: absent
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Migration: remove access-side config that was incorrectly deployed to upstream
 # (занимает порт 8443, отданный на upstream-узле виртуальным хостам HTTP)
-- name: "Migration: remove stale 10-aiproxy-upstreams.conf from upstream"
+- name: "Удалить устаревший файл 10-aiproxy-upstreams.conf на upstream"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/10-aiproxy-upstreams.conf
     state: absent
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
-- name: "Migration: remove stale aiproxy SNI map from upstream"
+- name: "Удалить устаревшую карту SNI ai-proxy на upstream"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/sni-map.d/aiproxy.conf
     state: absent
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Миграция: снятие терминатора TLS и записи Squid в карте SNI.
 # Обе появились в промежуточной топологии, где Squid стоял за отдельным терминатором.
 # Сейчас Squid — бэкенд маршрутизатора по умолчанию (fallback_squid), и они не нужны.
-- name: "Migration: remove Squid TLS terminator (Squid is now the default backend)"
+- name: "Удалить устаревший TLS-терминатор Squid"
   ansible.builtin.file:
     path: /etc/nginx/stream.d/10-squid-tls-term.conf
     state: absent
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Удаление включённого по умолчанию сайта nginx: он занимает порт 80 и мешает
 # обновлению пакетов и проверкам; ни одна служба проекта этот порт не использует.
-- name: "Migration: disable nginx default site (port 80 is unused by the project)"
+- name: "Отключить стандартный сайт nginx на неиспользуемом порту 80"
   ansible.builtin.file:
     path: /etc/nginx/sites-enabled/default
     state: absent
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # ===========================================================================
 # Пределы общего nginx: их задаёт ведущий проект узла
@@ -241,49 +241,49 @@
 # Прежде эти строки не задавал никто из нашего проекта: при одиночном
 # размещении действовало умолчание поставки (768 на рабочий процесс),
 # при совместном их ставил сосед, выводя из числа СВОИХ пользователей.
-- name: Bound shared nginx workers by its service memory
+- name: "Ограничить число рабочих процессов общего nginx бюджетом памяти"
   ansible.builtin.lineinfile:
     path: /etc/nginx/nginx.conf
     regexp: '^worker_processes'
     line: "worker_processes {{ proxy_nginx_workers | default(1) }};"
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
-- name: Tune shared nginx worker_connections (owner of the node's nginx)
+- name: "Настроить worker_connections общего nginx"
   ansible.builtin.lineinfile:
     path: /etc/nginx/nginx.conf
     regexp: '^\s*worker_connections'
     line: "\tworker_connections {{ nginx_worker_connections | default(4096) }};"
     insertafter: '^\s*events\s*\{'
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Предел дескрипторов рабочего процесса: соединение занимает два (клиентское
 # и к цели), плюс запас на файлы и сокеты службы. Без него предел процесса
 # остаётся системным и обрывает приём раньше, чем исчерпаются соединения.
-- name: Set shared nginx worker_rlimit_nofile (owner of the node's nginx)
+- name: "Настроить worker_rlimit_nofile общего nginx"
   ansible.builtin.lineinfile:
     path: /etc/nginx/nginx.conf
     regexp: '^\s*worker_rlimit_nofile'
     line: "worker_rlimit_nofile {{ nginx_worker_rlimit_nofile | default(fd_limit | default(65535)) }};"
     insertbefore: '^\s*events\s*\{'
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
-- name: Deploy MTProxy TLS terminator config (stream)
+- name: "Разместить потоковую конфигурацию TLS-терминатора MTProxy"
   ansible.builtin.template:
     src: nginx-mtproxy-stream.conf.j2
     dest: /etc/nginx/stream.d/10-mtproxy-tls.conf
     owner: root
     group: root
     mode: '0644'
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
-- name: Deploy MTProxy SNI map entry
+- name: "Разместить запись MTProxy в карте SNI"
   ansible.builtin.template:
     src: sni-map.d/mtproxy.conf.j2
     dest: /etc/nginx/stream.d/sni-map.d/mtproxy.conf
     owner: root
     group: root
     mode: '0644'
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # ===========================================================================
 # Уборка прежних версий mtg
@@ -293,7 +293,7 @@
 # рассчитывал откат, дороже занятого места. Предел задаётся осознанно, в инвентори.
 # Действующая версия из уборки исключена всегда, каким бы малым ни был предел.
 
-- name: List installed mtg versions
+- name: "Получить список установленных версий mtg"
   ansible.builtin.find:
     paths: /usr/local/lib/mtg
     file_type: directory
@@ -302,7 +302,7 @@
   changed_when: false
   when: (mtg_versions_keep | default(0) | int) > 0
 
-- name: Remove mtg versions beyond the keep limit
+- name: "Удалить прежние версии mtg сверх предела хранения"
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
@@ -325,7 +325,7 @@
 # При незашифрованном участке Squid принимает соединения сам, и звено лишнее —
 # отсюда прежний комментарий «bypasses nginx entirely», верный лишь для того случая.
 
-- name: Deploy transit TLS material for the Squid terminator
+- name: "Разместить TLS-материал участка для терминатора Squid"
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/tls/squid-transit.{{ item.ext }}"
     dest: "/etc/nginx/ssl/squid-transit.{{ item.ext }}"
@@ -338,9 +338,9 @@
   loop_control:
     label: "squid-transit.{{ item.ext }}"
   when: squid_transit_tls | default(false) | bool
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
-- name: Deploy Squid TLS terminator config (stream)
+- name: "Разместить потоковую конфигурацию TLS-терминатора Squid"
   ansible.builtin.template:
     src: nginx-squid-tls-term.conf.j2
     dest: /etc/nginx/stream.d/20-squid-tls-term.conf
@@ -348,9 +348,9 @@
     group: root
     mode: '0644'
   when: squid_transit_tls | default(false) | bool
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
-- name: Deploy Squid SNI map entry
+- name: "Разместить запись Squid в карте SNI"
   ansible.builtin.template:
     src: sni-map.d/squid.conf.j2
     dest: /etc/nginx/stream.d/sni-map.d/squid.conf
@@ -358,12 +358,12 @@
     group: root
     mode: '0644'
   when: squid_transit_tls | default(false) | bool
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Выключение признака убирает звено с узла, а не оставляет его работать втихую:
 # иначе терминатор продолжал бы слушать порт и принимать соединения после того,
 # как участок переведён на незашифрованный.
-- name: Remove Squid TLS terminator when the leg is not encrypted
+- name: "Удалить TLS-терминатор Squid при отключённом шифровании участка"
   ansible.builtin.file:
     path: "{{ item }}"
     state: absent
@@ -371,13 +371,13 @@
     - /etc/nginx/stream.d/20-squid-tls-term.conf
     - /etc/nginx/stream.d/sni-map.d/squid.conf
   when: not (squid_transit_tls | default(false) | bool)
-  notify: Reload nginx for mtproxy
+  notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Apply nginx config before starting mtg
-- name: Flush nginx handlers before starting mtg
+- name: "Выполнить ожидающие обработчики nginx перед запуском mtg"
   ansible.builtin.meta: flush_handlers
 
-- name: Enable and start nginx (upstream)
+- name: "Включить автозапуск и запустить nginx на upstream"
   ansible.builtin.systemd:
     name: nginx
     state: started
@@ -387,7 +387,7 @@
 # Phase: mtg daemon
 # ===========================================================================
 
-- name: Create mtproxy system user
+- name: "Создать системного пользователя mtproxy"
   ansible.builtin.user:
     name: mtproxy
     system: true
@@ -420,12 +420,12 @@
 #   откат — возврат прежнего номера версии: каталог предыдущей версии остаётся
 #     на узле, повторная загрузка не нужна. Для MTProxy это существенно:
 #     несовместимость клиентов обнаруживается уже после перезапуска.
-- name: Determine system architecture for mtg download
+- name: "Определить архитектуру узла для загрузки mtg"
   ansible.builtin.set_fact:
     mtg_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
 
 # Каталог версий mtg; общий для всех установленных версий.
-- name: Ensure versioned mtg install root exists
+- name: "Создать корневой каталог версий mtg"
   ansible.builtin.file:
     path: /usr/local/lib/mtg
     state: directory
@@ -435,12 +435,12 @@
 
 # Установлена ли ЗАДАННАЯ версия — единственный вопрос, решающий, нужна ли
 # загрузка. Ответ не зависит от состояния /usr/local/bin/mtg.
-- name: Check whether the requested mtg version is already installed
+- name: "Проверить наличие требуемой версии mtg"
   ansible.builtin.stat:
     path: "/usr/local/lib/mtg/{{ mtproxy_version }}/mtg"
   register: mtg_versioned_binary
 
-- name: Download and install mtg
+- name: "Загрузить и установить mtg"
   when: not mtg_versioned_binary.stat.exists
   block:
     # Контрольная сумма проверяется при непустом mtproxy_sha256. Пустое значение
@@ -448,20 +448,20 @@
     # на новую версию до её отыскания, то есть откладывала бы обновление
     # бессрочно. Заданная — закрывает распаковку стороннего архива в системный
     # каталог без проверки целостности.
-    - name: Download mtg archive
+    - name: "Загрузить архив mtg"
       ansible.builtin.get_url:
         url: "https://github.com/9seconds/mtg/releases/download/v{{ mtproxy_version }}/mtg-{{ mtproxy_version }}-linux-{{ mtg_arch }}.tar.gz"
         dest: "/tmp/mtg-{{ mtproxy_version }}.tar.gz"
         mode: "0644"
         checksum: "{{ ('sha256:' + mtproxy_sha256) if (mtproxy_sha256 | default('') | length > 0) else omit }}"
 
-    - name: Create temp directory for mtg extraction
+    - name: "Создать временный каталог распаковки mtg"
       ansible.builtin.file:
         path: "/tmp/mtg-extract-{{ mtproxy_version }}"
         state: directory
         mode: "0755"
 
-    - name: Extract mtg archive
+    - name: "Распаковать архив mtg"
       ansible.builtin.unarchive:
         src: "/tmp/mtg-{{ mtproxy_version }}.tar.gz"
         dest: "/tmp/mtg-extract-{{ mtproxy_version }}"
@@ -470,14 +470,14 @@
     # Поиск бинарника сохранён: имя файла внутри архива между выпусками плавает
     # (то `mtg`, то `mtg-{версия}-linux-{арх}`), и жёсткий путь ломался бы на
     # очередном выпуске.
-    - name: Find mtg binary in extracted files
+    - name: "Найти бинарный файл mtg после распаковки"
       ansible.builtin.shell:
         cmd: find /tmp/mtg-extract-{{ mtproxy_version }} -name 'mtg' -type f -o -name 'mtg-*-linux-*' -type f | head -1
       register: mtg_found_binary
       changed_when: false
       failed_when: mtg_found_binary.stdout == ""
 
-    - name: Create versioned directory for this mtg release
+    - name: "Создать каталог требуемой версии mtg"
       ansible.builtin.file:
         path: "/usr/local/lib/mtg/{{ mtproxy_version }}"
         state: directory
@@ -485,7 +485,7 @@
         group: root
         mode: "0755"
 
-    - name: Install mtg binary into its versioned directory
+    - name: "Установить бинарный файл mtg в каталог версии"
       ansible.builtin.copy:
         src: "{{ mtg_found_binary.stdout }}"
         dest: "/usr/local/lib/mtg/{{ mtproxy_version }}/mtg"
@@ -494,7 +494,7 @@
         mode: "0755"
         remote_src: true
 
-    - name: Clean up temp files
+    - name: "Удалить временные файлы"
       ansible.builtin.file:
         path: "{{ item }}"
         state: absent
@@ -509,7 +509,7 @@
 # обычный файл; `force: true` заменяет его ссылкой. Замена выполняется только
 # ПОСЛЕ заполнения версионированного каталога: при отказе загрузки блок выше
 # прерывает роль, и прежний бинарник остаётся на месте нетронутым.
-- name: Point /usr/local/bin/mtg at the requested version
+- name: "Переключить ссылку mtg на требуемую версию"
   ansible.builtin.file:
     src: "/usr/local/lib/mtg/{{ mtproxy_version }}/mtg"
     dest: /usr/local/bin/mtg
@@ -517,9 +517,9 @@
     owner: root
     group: root
     force: true
-  notify: Restart mtg
+  notify: "Перезапустить mtg"
 
-- name: Create mtproxy config directory
+- name: "Создать каталог конфигурации MTProxy"
   ansible.builtin.file:
     path: /etc/mtproxy
     state: directory
@@ -529,17 +529,17 @@
 
 # Генерация секрета при первом деплое (если не задан вручную)
 # Проверяем mtg.toml (v2) и mtg.env (legacy) для обратной совместимости
-- name: Check if mtg config already exists (TOML)
+- name: "Проверить наличие конфигурации mtg в формате TOML"
   ansible.builtin.stat:
     path: /etc/mtproxy/mtg.toml
   register: mtg_toml_file
 
-- name: Check if legacy mtg.env exists (migration from v1 format)
+- name: "Проверить наличие прежнего файла mtg.env"
   ansible.builtin.stat:
     path: /etc/mtproxy/mtg.env
   register: mtg_env_file
 
-- name: Generate mtg secret if not provided
+- name: "Создать начальный секрет mtg при отсутствии настроенного и сохранённого"
   ansible.builtin.command:
     cmd: /usr/local/bin/mtg generate-secret --hex {{ mtproxy_fake_tls_domain }}
   register: mtg_generated_secret
@@ -551,7 +551,7 @@
   changed_when: false
   no_log: true
 
-- name: Read existing secret from TOML config
+- name: "Прочитать существующий секрет из конфигурации TOML"
   ansible.builtin.shell:
     cmd: grep '^secret' /etc/mtproxy/mtg.toml | sed 's/.*"\(.*\)"/\1/'
   register: mtg_existing_secret_toml
@@ -561,7 +561,7 @@
   changed_when: false
   no_log: true
 
-- name: Read existing secret from legacy env file
+- name: "Прочитать существующий секрет из прежнего файла окружения"
   ansible.builtin.shell:
     cmd: grep '^MTG_SECRET=' /etc/mtproxy/mtg.env | cut -d= -f2
   register: mtg_existing_secret_env
@@ -572,7 +572,7 @@
   changed_when: false
   no_log: true
 
-- name: Set mtproxy_secret fact
+- name: "Определить действующий секрет MTProxy"
   no_log: true
   ansible.builtin.set_fact:
     mtproxy_secret_resolved: >-
@@ -588,22 +588,22 @@
         {{ mtg_generated_secret.stdout }}
       {%- endif -%}
 
-- name: Deploy mtg TOML config (v2 format)
+- name: "Разместить конфигурацию mtg в формате TOML v2"
   ansible.builtin.template:
     src: mtg.toml.j2
     dest: /etc/mtproxy/mtg.toml
     owner: mtproxy
     group: mtproxy
     mode: "0640"
-  notify: Restart mtg
+  notify: "Перезапустить mtg"
 
-- name: Remove legacy mtg.env if migrated to TOML
+- name: "Удалить прежний mtg.env после перехода на TOML"
   ansible.builtin.file:
     path: /etc/mtproxy/mtg.env
     state: absent
   when: mtg_env_file.stat.exists | default(false)
 
-- name: Deploy mtproxy users file
+- name: "Разместить административный реестр пользователей MTProxy"
   ansible.builtin.template:
     src: users.txt.j2
     dest: /etc/mtproxy/users.txt
@@ -611,7 +611,7 @@
     group: mtproxy
     mode: "0640"
 
-- name: Deploy mtg systemd unit
+- name: "Разместить службу systemd для mtg"
   ansible.builtin.copy:
     dest: /etc/systemd/system/mtg.service
     mode: "0644"
@@ -634,14 +634,14 @@
       [Install]
       WantedBy=multi-user.target
   notify:
-    - Reload systemd for mtg
-    - Restart mtg
+    - "Перечитать конфигурацию systemd для mtg"
+    - "Перезапустить mtg"
 
-- name: Reload systemd after mtg unit deploy
+- name: "Перечитать конфигурацию systemd после установки службы mtg"
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: Enable and start mtg
+- name: "Включить автозапуск и запустить mtg"
   ansible.builtin.systemd:
     name: mtg
     state: started

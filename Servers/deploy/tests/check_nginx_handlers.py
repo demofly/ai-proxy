@@ -11,7 +11,7 @@ import tempfile
 import yaml
 
 DEPLOY = Path(__file__).resolve().parents[1]
-TASK_NAME = 'Bound shared nginx workers by its service memory'
+TASK_NAME = 'Ограничить число рабочих процессов общего nginx бюджетом памяти'
 
 
 def main():

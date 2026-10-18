@@ -17,13 +17,13 @@ def mtproxy_cluster_plan(nodes, hostvars, reads):
     try:
         domains = {hostvars[name].get('mtproxy_fake_tls_domain', 'max.ru') for name in nodes}
         if len(domains) != 1:
-            raise ValueError('MTProxy backends must use one fake-TLS domain.')
+            raise ValueError('Все серверы MTProxy должны использовать один домен fake-TLS.')
         domain = domains.pop()
         if not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?', domain):
-            raise ValueError('Set a valid ASCII mtproxy_fake_tls_domain for all backends.')
+            raise ValueError('Задайте корректный ASCII-домен mtproxy_fake_tls_domain на всех серверах.')
         configured = {hostvars[name].get('mtproxy_secret', '') for name in nodes}
         if len(configured) != 1:
-            raise ValueError('Set the same mtproxy_secret on every enabled upstream; partial rotation is unsafe.')
+            raise ValueError('Задайте одинаковый mtproxy_secret на всех включённых upstream; частичная ротация небезопасна.')
         secret = configured.pop()
         if not secret:
             contents = {}
@@ -38,22 +38,22 @@ def mtproxy_cluster_plan(nodes, hostvars, reads):
                 else:
                     matches = re.findall(r'^MTG_SECRET=(.+)$', files.get('mtg.env', ''), re.M)
                 if len(matches) != 1:
-                    raise ValueError('Existing MTProxy configuration has no unique secret; inspect it before deployment.')
+                    raise ValueError('В существующей конфигурации MTProxy нет однозначного секрета; проверьте её до деплоймента.')
                 existing.add(matches[0].strip())
             if len(existing) > 1:
-                raise ValueError('Upstreams have different existing MTProxy secrets. Select one shared mtproxy_secret in inventory; automatic rotation is refused.')
+                raise ValueError('На upstream сохранены разные секреты MTProxy. Задайте общий mtproxy_secret в inventory; автоматическая ротация запрещена.')
             secret = next(iter(existing), '')
         if secret:
             if not re.fullmatch(r'ee[0-9a-fA-F]{32}(?:[0-9a-fA-F]{2})+', secret):
-                raise ValueError('A fake-TLS MTProxy secret must have ee + 16 key bytes + encoded domain.')
+                raise ValueError('Секрет fake-TLS MTProxy должен содержать ee, 16 байт ключа и домен в hex-кодировке.')
             if bytes.fromhex(secret[34:]).decode('ascii').lower() != domain.lower():
-                raise ValueError('MTProxy secret encodes a different domain. Update the domain and secret together explicitly.')
+                raise ValueError('В секрете MTProxy закодирован другой домен. Явно обновите домен и секрет одновременно.')
         return {'secret':secret, 'domain':domain, 'error':''}
     except ValueError as error:
         # All validation messages above are static and contain no secret values.
         # Unicode conversion failures must not echo a secret through exceptions.
         return {'secret':'', 'domain':'', 'error': str(error) if type(error) is ValueError
-                else 'Invalid encoding in MTProxy configuration.'}
+                else 'Недопустимая кодировка в конфигурации MTProxy.'}
 
 
 class FilterModule:

@@ -14,7 +14,7 @@
 # первому, кто допишет notify. Перезапуск остаётся у двух операций, где он
 # неизбежен и выполняется не обработчиком: остановка при первой установке
 # (задача роли) и обновление пакета (postinst-сценарий nginx).
-- name: Reload nginx
+- name: "Перечитать конфигурацию nginx"
   ansible.builtin.shell: |
     systemctl reset-failed nginx 2>/dev/null || true
     if systemctl is-active --quiet nginx; then

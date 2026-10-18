@@ -4,18 +4,18 @@
 
 # --- CrowdSec repository ---
 
-- name: Create apt keyrings directory
+- name: "Создать каталог ключей репозиториев apt"
   ansible.builtin.file:
     path: /etc/apt/keyrings
     state: directory
     mode: "0755"
 
-- name: Download CrowdSec GPG key
+- name: "Загрузить GPG-ключ CrowdSec"
   ansible.builtin.shell:
     cmd: curl -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | gpg --dearmor -o /etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg
     creates: /etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg
 
-- name: Add CrowdSec apt repository
+- name: "Добавить репозиторий apt CrowdSec"
   ansible.builtin.copy:
     dest: /etc/apt/sources.list.d/crowdsec_crowdsec.list
     mode: "0644"
@@ -23,13 +23,13 @@
       deb [signed-by=/etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/any/ any main
       deb-src [signed-by=/etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/any/ any main
 
-- name: Update apt cache after adding CrowdSec repo
+- name: "Обновить кеш apt после добавления репозитория CrowdSec"
   ansible.builtin.apt:
     update_cache: true
 
 # --- Install CrowdSec packages ---
 
-- name: Fix broken dpkg state if previous install failed
+- name: "Восстановить состояние dpkg после незавершённой установки"
   ansible.builtin.command:
     cmd: dpkg --configure -a
   changed_when: false
@@ -39,7 +39,7 @@
 # блокировке не принимаются, уже поставленные бэкендом правила остаются в силе.
 # `throttle: 1` разводит перезапуск по узлам, чтобы окно без разбора журналов
 # не совпало на всей группе разом.
-- name: Install CrowdSec security engine
+- name: "Установить CrowdSec"
   ansible.builtin.apt:
     name: crowdsec
     state: "{{ pkg_state }}"
@@ -50,7 +50,7 @@
 # Обновление бэкенда блокировок перезапускает его; при старте он заново
 # выстраивает собственные таблицы nftables по списку решений из локальной базы,
 # поэтому действующие блокировки переживают смену версии.
-- name: Install CrowdSec firewall bouncer (nftables)
+- name: "Установить firewall bouncer CrowdSec для nftables"
   ansible.builtin.apt:
     name: crowdsec-firewall-bouncer-nftables
     state: "{{ pkg_state }}"
@@ -58,30 +58,30 @@
 
 # SQLite connections each retain native/page-cache memory outside GOMEMLIMIT.
 # Preserve operator/neighbor settings while bounding the local SQLite pool.
-- name: Read CrowdSec base configuration
+- name: "Прочитать базовую конфигурацию CrowdSec"
   ansible.builtin.slurp:
     src: /etc/crowdsec/config.yaml
   register: _crowdsec_base_config
   no_log: true
 
-- name: Check for existing CrowdSec local overrides
+- name: "Проверить наличие локальных переопределений CrowdSec"
   ansible.builtin.stat:
     path: /etc/crowdsec/config.yaml.local
   register: _crowdsec_local_config_file
 
-- name: Read existing CrowdSec local overrides
+- name: "Прочитать локальные переопределения CrowdSec"
   ansible.builtin.slurp:
     src: /etc/crowdsec/config.yaml.local
   register: _crowdsec_local_config_raw
   when: _crowdsec_local_config_file.stat.exists
   no_log: true
 
-- name: Preserve existing CrowdSec local configuration
+- name: "Сохранить существующую локальную конфигурацию CrowdSec"
   ansible.builtin.set_fact:
     _crowdsec_local_config: '{{ _crowdsec_local_config_raw.content | default("e30=") | b64decode | from_yaml | default({}, true) }}'
   no_log: true
 
-- name: Bound the CrowdSec SQLite pool without replacing other local settings
+- name: "Ограничить пул SQLite CrowdSec с сохранением остальных настроек"
   ansible.builtin.copy:
     dest: /etc/crowdsec/config.yaml.local
     mode: '0600'
@@ -89,7 +89,7 @@
   when: >-
     ((_crowdsec_base_config.content | b64decode | from_yaml)
      | combine(_crowdsec_local_config, recursive=true)).db_config.type == 'sqlite'
-  notify: Restart crowdsec
+  notify: "Перезапустить CrowdSec"
   no_log: true
 
 # --- Install and upgrade collections (detection scenarios + parsers) ---
@@ -98,7 +98,7 @@
 # НЕЗАВИСИМО от режима обновления пакетов: отставшие правила не ловят текущие
 # атаки, а служба при этом выглядит работающей.
 
-- name: Update CrowdSec hub index
+- name: "Обновить индекс коллекций CrowdSec"
   ansible.builtin.command:
     cmd: cscli hub update
   changed_when: false
@@ -112,7 +112,7 @@
 # ('overwrite', 'already'): формулировки утилиты меняются между её версиями, и
 # признак ломается молча — отчёт остаётся зелёным, показывая неверный результат.
 # Сверка состава от формулировок не зависит.
-- name: Snapshot installed CrowdSec collections before changes
+- name: "Получить список коллекций CrowdSec до изменений"
   ansible.builtin.command:
     cmd: cscli collections list -o json
   register: _cs_collections_before
@@ -120,7 +120,7 @@
 
 # Установка недостающих коллекций. Для уже установленной коллекции команда
 # ничего не делает — новых версий она НЕ приносит, этим занимается upgrade ниже.
-- name: Install CrowdSec collections
+- name: "Установить коллекции CrowdSec"
   ansible.builtin.command:
     cmd: "cscli collections install {{ item }}"
   loop:
@@ -137,7 +137,7 @@
 # Перевод установленных коллекций на версии из индекса хаба. Ровно эта команда
 # была записана в docs/AA/TD/TD-VP.md как ручной сценарий оператора; перенос её
 # в роль снимает расхождение между описанным сценарием и кодом.
-- name: Upgrade installed CrowdSec collections to hub versions
+- name: "Обновить установленные коллекции CrowdSec до версий каталога"
   ansible.builtin.command:
     cmd: cscli collections upgrade --all
   register: cscli_upgrade
@@ -149,32 +149,32 @@
 # Факт изменения — расхождение состава до и после. Перезапуск нужен потому, что
 # движок держит разобранные сценарии и парсеры в памяти: без него новые правила
 # лежат на диске, но не действуют.
-- name: Detect CrowdSec collection changes and restart the engine
+- name: "Проверить изменения коллекций и запланировать перезапуск CrowdSec"
   ansible.builtin.command:
     cmd: cscli collections list -o json
   register: _cs_collections_after
   changed_when: _cs_collections_after.stdout != _cs_collections_before.stdout
-  notify: Restart crowdsec
+  notify: "Перезапустить CrowdSec"
 
 # --- Whitelist infrastructure IPs (prevent banning our own nodes) ---
 
-- name: Deploy CrowdSec infrastructure whitelist
+- name: "Разместить список доверенных узлов инфраструктуры для CrowdSec"
   ansible.builtin.template:
     src: whitelist-infrastructure.yaml.j2
     dest: /etc/crowdsec/parsers/s02-enrich/whitelist-infrastructure.yaml
     owner: root
     group: root
     mode: "0644"
-  notify: Restart crowdsec
+  notify: "Перезапустить CrowdSec"
 
 # --- Acquisition config (which logs to monitor) ---
 
-- name: Check previous acquisition config
+- name: "Проверить наличие прежней конфигурации источников журналов"
   ansible.builtin.stat:
     path: /etc/crowdsec/acquis.yaml
   register: _acquis_previous
 
-- name: Read previous acquisition config
+- name: "Прочитать прежнюю конфигурацию источников журналов"
   ansible.builtin.slurp:
     src: /etc/crowdsec/acquis.yaml
   register: _acquis_previous_content
@@ -183,7 +183,7 @@
 # Каталог источников: каждый проект узла владеет своим файлом и чужих не касается.
 # Прежде роль перезаписывала общий /etc/crowdsec/acquis.yaml целиком, отчего прогон
 # после соседнего проекта затирал его источники.
-- name: Ensure CrowdSec acquisition directory exists
+- name: "Создать каталог источников журналов CrowdSec"
   ansible.builtin.file:
     path: /etc/crowdsec/acquis.d
     state: directory
@@ -193,7 +193,7 @@
 
 # Миграция: прежний общий файл, если он порождён этой ролью, заменяется пустым.
 # Признак авторства — строка Ansible и заголовок нашего шаблона; чужой файл не трогаем.
-- name: "Migration: neutralize acquisition config previously written by this role"
+- name: "Отключить прежнюю конфигурацию источников журналов этой роли"
   ansible.builtin.copy:
     content: |
       # Источники журналов вынесены в /etc/crowdsec/acquis.d/ по файлу на проект.
@@ -204,16 +204,16 @@
     group: root
     mode: '0644'
   when: _acquis_previous.stat.exists and 'sources for attack detection' in (_acquis_previous_content.content | default('') | b64decode)
-  notify: Restart crowdsec
+  notify: "Перезапустить CrowdSec"
 
-- name: Deploy CrowdSec acquisition config
+- name: "Разместить конфигурацию источников журналов CrowdSec"
   ansible.builtin.template:
     src: acquis.yaml.j2
     dest: /etc/crowdsec/acquis.d/aiproxy.yaml
     owner: root
     group: root
     mode: "0644"
-  notify: Restart crowdsec
+  notify: "Перезапустить CrowdSec"
 
 # --- Systemd memory limits ---
 
@@ -221,19 +221,19 @@
 # проекта: кто прогонялся последним, тот и задавал предел, молча заменив чужой.
 # Файл снимается, а свой пишется с префиксом проекта — так владелец значения
 # виден по имени, а не по времени последнего прогона.
-- name: "Migration: remove shared-name memory limit file for CrowdSec"
+- name: "Удалить устаревший файл предела памяти CrowdSec с общим именем"
   ansible.builtin.file:
     path: /etc/systemd/system/crowdsec.service.d/memory-limit.conf
     state: absent
-  notify: Restart crowdsec
+  notify: "Перезапустить CrowdSec"
 
-- name: Create systemd override directory for crowdsec
+- name: "Создать каталог переопределений systemd для CrowdSec"
   ansible.builtin.file:
     path: /etc/systemd/system/crowdsec.service.d
     state: directory
     mode: "0755"
 
-- name: Deploy systemd memory limit for CrowdSec
+- name: "Разместить предел памяти systemd для CrowdSec"
   ansible.builtin.copy:
     dest: /etc/systemd/system/crowdsec.service.d/10-aiproxy-memory.conf
     mode: "0644"
@@ -243,15 +243,15 @@
       # Keep 64 MiB outside it, rather than forcing hot pages out at small caps.
       Environment=GOMEMLIMIT={{ [(mem_crowdsec_mb | int * 0.65) | int, mem_crowdsec_mb | int - 64] | min }}MiB
       MemoryMax={{ mem_crowdsec_mb }}M
-  notify: Restart crowdsec
+  notify: "Перезапустить CrowdSec"
 
-- name: Create systemd override directory for crowdsec-firewall-bouncer
+- name: "Создать каталог переопределений systemd для bouncer CrowdSec"
   ansible.builtin.file:
     path: /etc/systemd/system/crowdsec-firewall-bouncer.service.d
     state: directory
     mode: "0755"
 
-- name: Deploy systemd memory limit for firewall bouncer
+- name: "Разместить предел памяти systemd для bouncer CrowdSec"
   ansible.builtin.copy:
     dest: /etc/systemd/system/crowdsec-firewall-bouncer.service.d/memory-limit.conf
     mode: "0644"
@@ -259,21 +259,21 @@
       [Service]
       Environment=GOMEMLIMIT={{ (mem_crowdsec_bouncer_mb | int * 0.65) | int }}MiB
       MemoryMax={{ mem_crowdsec_bouncer_mb | default(24) }}M
-  notify: Restart crowdsec-firewall-bouncer
+  notify: "Перезапустить bouncer CrowdSec"
 
-- name: Reload systemd after CrowdSec overrides
+- name: "Перечитать конфигурацию systemd после настройки CrowdSec"
   ansible.builtin.systemd:
     daemon_reload: true
 
 # --- Enable and start services ---
 
-- name: Enable and start CrowdSec
+- name: "Включить автозапуск и запустить CrowdSec"
   ansible.builtin.systemd:
     name: crowdsec
     state: started
     enabled: true
 
-- name: Enable and start CrowdSec firewall bouncer
+- name: "Включить автозапуск и запустить bouncer CrowdSec"
   ansible.builtin.systemd:
     name: crowdsec-firewall-bouncer
     state: started

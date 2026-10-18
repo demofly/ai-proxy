@@ -30,7 +30,7 @@ def main():
         before = check()
         assert before.returncode != 0 and 'duplicate log entry' in before.stderr
         play = yaml.safe_load((DEPLOY/'playbook.yml').read_text())[0]
-        names = {'Remove the obsolete duplicate Squid logrotate rule','Deploy logrotate rule for Squid logs'}
+        names = {'Удалить устаревшее дублирующее правило ротации журналов Squid','Разместить правило ротации журналов Squid'}
         tasks = [t for t in play['tasks'] if t.get('name') in names]
         assert len(tasks) == 2
         template = root/'squid.j2'

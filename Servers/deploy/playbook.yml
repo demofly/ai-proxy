@@ -3,7 +3,7 @@
 # Ansible Playbook для развертывания AI Proxy на базе Squid
 # Использование: ansible-playbook -i inventory.yml playbook.yml
 
-- name: Deploy AI Proxy (Squid)
+- name: "Развернуть ai-proxy на базе Squid"
   hosts: all
   become: true
 
@@ -32,7 +32,7 @@
     # в перезапуск разом.
     #
     # Исключение из режима обновления одно и названо по месту — nftables
-    # (см. задачу «Install nftables»): его ExecStop сбрасывает ruleset целиком,
+    # (см. задачу «Установить nftables»): его ExecStop сбрасывает ruleset целиком,
     # включая таблицы CrowdSec bouncer.
     pkg_state: "{{ 'latest' if (service_upgrades_enabled | default(true) | bool) else 'present' }}"
 
@@ -58,12 +58,12 @@
     # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
-    - name: Resolve the default MTProxy fake-TLS domain without masking inventory
+    - name: "Определить домен fake-TLS MTProxy с учётом inventory"
       ansible.builtin.set_fact:
         mtproxy_fake_tls_domain: '{{ mtproxy_fake_tls_domain | default("max.ru") }}'
       tags: [always]
 
-    - name: Resolve the load-balanced MTProxy credential before changing hosts
+    - name: "Определить общий секрет MTProxy до изменения узлов"
       ansible.builtin.include_tasks:
         file: tasks/mtproxy-cluster.yml
         apply:
@@ -71,12 +71,12 @@
       run_once: true
       tags: [always]
 
-    - name: Refresh hardware facts before resource planning
+    - name: "Обновить сведения об оборудовании перед расчётом ресурсов"
       tags: [always]
       ansible.builtin.setup:
         gather_subset: ['!all', '!min', hardware]
 
-    - name: Resolve inventory resource defaults without masking inventory values
+    - name: "Определить параметры ресурсов с учётом inventory"
       tags: [always]
       ansible.builtin.set_fact:
         mem_reserve_share: '{{ mem_reserve_share | default(0.25) }}'
@@ -87,19 +87,20 @@
         mem_reserve_when_shared_share: '{{ mem_reserve_when_shared_share | default(0.15) }}'
         mem_foreign_reserved_mb: '{{ mem_foreign_reserved_mb | default(0) }}'
 
-    - name: Check cgroup v2 support before changing services
+    - name: "Проверить поддержку cgroup v2 до изменения служб"
       tags: [always]
       ansible.builtin.slurp:
         src: /sys/fs/cgroup/cgroup.controllers
       register: _proxy_cgroup_controllers
 
-    - name: Require the memory controller for the complete hard budget
+    - name: "Проверить доступность контроллера памяти cgroup v2"
       tags: [always]
       ansible.builtin.assert:
         that: "'memory' in (_proxy_cgroup_controllers.content | b64decode).split()"
-        fail_msg: 'This deployment requires systemd with cgroup v2 memory control for its RAM/swap guarantees.'
+        fail_msg: 'Для ограничения RAM и swap требуется systemd с контроллером памяти cgroup v2.'
+        success_msg: 'Контроллер памяти cgroup v2 доступен.'
 
-    - name: Calculate resource limits
+    - name: "Рассчитать системные пределы ресурсов"
       tags: [always]
       ansible.builtin.set_fact:
         cpu_cores: "{{ ansible_processor_vcpus | default(1) }}"
@@ -122,7 +123,7 @@
     # Осматриваются три каталога модульного nginx — по одному на контекст, куда
     # соседний проект кладёт свои файлы. Собственные имена перечислены поимённо;
     # всё, что не наше, принадлежит соседям.
-    - name: Найти чужие файлы в каталогах расширения nginx
+    - name: "Найти чужие файлы в каталогах расширения nginx"
       tags: [always]
       ansible.builtin.find:
         paths: "{{ item.path }}"
@@ -144,7 +145,7 @@
       failed_when: false
       changed_when: false
 
-    - name: Установить признак совместного размещения
+    - name: "Установить признак совместного размещения"
       tags: [always]
       ansible.builtin.set_fact:
         # Объявленное shared_host: true остаётся ручным перекрытием и осмотром
@@ -158,21 +159,22 @@
               | map(attribute='files') | map('default', []) | list | flatten
               | map(attribute='path') | list) }}
 
-    - name: Сообщить результат осмотра узла
+    - name: "Показать результат осмотра узла"
       tags: [always]
       ansible.builtin.debug:
         msg: >-
           Совместное размещение: {{ 'обнаружено' if (shared_host | bool) else 'не обнаружено' }}.
           {{ 'Чужие файлы: ' ~ (_shared_host_evidence | join(', ')) if _shared_host_evidence | length > 0
              else 'Чужих файлов в каталогах расширения nginx нет.' }}
-          Бюджет памяти: {{ (mem_share_when_shared | float * 100) | int if (shared_host | bool)
+          Верхняя доля памяти до учёта потолка проекта и соседних служб:
+          {{ (mem_share_when_shared | float * 100) | int if (shared_host | bool)
              else ((1 - mem_reserve_share | float) * 100) | int }} % памяти узла.
 
     # Пределы памяти служб: доля RAM, но не ниже нижней границы
     # Выделяемый объём считается ПЕРВЫМ и отдельной задачей: от него зависят пределы
     # служб, а значение факта, вычисленного в том же вызове set_fact, соседним
     # выражениям того же вызова недоступно.
-    - name: Detect an active shared nginx before budgeting
+    - name: "Проверить состояние общего nginx перед расчётом бюджета"
       tags: [always]
       ansible.builtin.command: systemctl is-active nginx
       register: _proxy_nginx_state
@@ -180,12 +182,12 @@
       failed_when: false
       check_mode: false
 
-    - name: Include the shared nginx in the owner resource plan
+    - name: "Учесть общий nginx в плане ресурсов"
       tags: [always]
       ansible.builtin.set_fact:
         _proxy_nginx_needed: "{{ behind_nginx | default(false) | bool or mtproxy_enabled | default(false) | bool or _proxy_nginx_state.stdout == 'active' }}"
 
-    - name: Validate host resource shares
+    - name: "Проверить доли памяти и резервы узла"
       tags: [always]
       ansible.builtin.assert:
         that:
@@ -195,9 +197,10 @@
           - mem_foreign_reserved_mb | int >= 0
           - mem_system_min_mb | int >= 128
           - proxy_memory_budget_mb | default(1) | int > 0
-        fail_msg: 'Invalid resource reserves or project cap. An optional proxy_memory_budget_mb must be positive; 1000000000 bytes remains a hard upper bound.'
+        fail_msg: 'Недопустимые резервы или потолок памяти проекта. proxy_memory_budget_mb должен быть положительным; жёсткий верхний предел — 1000000000 байт.'
+        success_msg: 'Доли памяти, резервы ОС и потолок проекта заданы корректно.'
 
-    - name: Collect current service memory limits
+    - name: "Получить действующие пределы памяти служб"
       tags: [always]
       ansible.builtin.command:
         argv: [systemctl, show, '*.service', --property=Id, --property=MemoryMax, --property=ActiveState]
@@ -205,7 +208,7 @@
       changed_when: false
       check_mode: false
 
-    - name: Account for services outside ai-proxy
+    - name: "Учесть память служб соседних проектов"
       tags: [always]
       ansible.builtin.set_fact:
         _proxy_foreign_memory: >-
@@ -215,14 +218,15 @@
              + (['keepalived.service'] if (proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined) else [])
              + (['crowdsec.service', 'crowdsec-firewall-bouncer.service'] if crowdsec_enabled | default(false) | bool else [])) }}
 
-    - name: Require limits or an explicit reserve for foreign applications
+    - name: "Проверить пределы памяти или явный резерв соседних приложений"
       tags: [always]
       ansible.builtin.assert:
         that:
           - _proxy_foreign_memory.unbounded | length == 0 or mem_foreign_reserved_mb | int > 0
-        fail_msg: "Unbounded foreign applications: {{ _proxy_foreign_memory.unbounded | join(', ') }}. Set limits or mem_foreign_reserved_mb."
+        fail_msg: "У соседних приложений нет предела памяти: {{ _proxy_foreign_memory.unbounded | join(', ') }}. Настройте MemoryMax или задайте их суммарный резерв mem_foreign_reserved_mb."
+        success_msg: 'Для соседних приложений заданы пределы памяти или явный резерв.'
 
-    - name: Calculate the system and foreign memory reserve
+    - name: "Рассчитать резерв памяти ОС и соседних приложений"
       tags: [always]
       ansible.builtin.set_fact:
         mem_foreign_effective_mb: "{{ [_proxy_foreign_memory.reserved_mb, mem_foreign_reserved_mb | int] | max }}"
@@ -230,7 +234,7 @@
           {{ [mem_system_min_mb | int,
               (ansible_memtotal_mb | int * (mem_reserve_when_shared_share | float if shared_host | bool else mem_reserve_share | float)) | round(0, 'ceil') | int] | max }}
 
-    - name: Identify enabled services and fixed memory limits
+    - name: "Определить включённые службы и фиксированные пределы памяти"
       tags: [always]
       ansible.builtin.set_fact:
         _proxy_enabled_services: >-
@@ -244,19 +248,19 @@
              | combine({'crowdsec': crowdsec_memory_mb} if crowdsec_memory_mb is defined else {})
              | combine({'crowdsec_bouncer': crowdsec_fw_bouncer_memory_mb} if crowdsec_fw_bouncer_memory_mb is defined else {}) }}
 
-    - name: Calculate minimum service memory requirements
+    - name: "Рассчитать минимальную потребность служб в памяти"
       tags: [always]
       ansible.builtin.set_fact:
         _proxy_minimum_plan: '{{ 0 | proxy_memory_plan(_proxy_enabled_services, _proxy_memory_overrides) }}'
 
-    - name: Calculate the host-derived project ceiling
+    - name: "Рассчитать потолок памяти проекта по RAM узла"
       tags: [always]
       ansible.builtin.set_fact:
         _proxy_budget: >-
           {{ ansible_memtotal_mb | proxy_memory_budget(proxy_memory_budget_mb | default(none),
                                                        _proxy_minimum_plan.minimum_mb) }}
 
-    - name: Calculate allocatable memory without exceeding physical RAM
+    - name: "Рассчитать доступную память с учётом физических ограничений"
       tags: [always]
       ansible.builtin.set_fact:
         mem_allocatable_mb: >-
@@ -266,13 +270,13 @@
              if shared_host | bool else [_proxy_budget.mb | int,
                ansible_memtotal_mb | int - mem_system_reserved_mb | int - mem_foreign_effective_mb | int] | min }}
 
-    - name: Distribute the project budget across enabled services
+    - name: "Распределить бюджет памяти между включёнными службами"
       tags: [always]
       ansible.builtin.set_fact:
         _proxy_memory_plan: >-
           {{ mem_allocatable_mb | proxy_memory_plan(_proxy_enabled_services, _proxy_memory_overrides) }}
 
-    - name: Calculate per-service memory limits
+    - name: "Рассчитать пределы памяти каждой службы"
       tags: [always]
       ansible.builtin.set_fact:
         mem_squid_mb: '{{ _proxy_memory_plan.limits.squid }}'
@@ -287,7 +291,7 @@
 
     # Планируемая сумма — только те службы, что действительно разворачиваются
     # на этом узле: набор различается для access и upstream
-    - name: Bound workers by the service memory budget
+    - name: "Ограничить число рабочих процессов бюджетом памяти"
       tags: [always]
       ansible.builtin.set_fact:
         squid_workers: "{{ [cpu_cores | int, [mem_squid_mb | int // 64, 1] | max] | min }}"
@@ -297,7 +301,7 @@
         squid_fd_limit: "{{ [fd_limit | int, [4096, (mem_squid_mb | int - 16) * 256] | max] | min }}"
         proxy_effective_max_connections: "{{ [proxy_max_connections | default(96) | int, (mem_squid_mb | int - 24) * 6] | min }}"
 
-    - name: Validate worker counts and nginx connections against memory
+    - name: "Проверить число рабочих процессов и соединений по бюджету памяти"
       tags: [always]
       ansible.builtin.assert:
         that:
@@ -322,9 +326,10 @@
           - mtproxy_effective_max_connections | int * 4 + 256 <= 4096
           - read_timeout | default('1 hour') | squid_duration_seconds > 0
           - client_lifetime | default('1 day') | squid_duration_seconds > read_timeout | default('1 hour') | squid_duration_seconds
-        fail_msg: 'Invalid service/worker/connection budget or timeout policy. Check proxy_memory_limits, proxy_max_connections, mtproxy_max_connections and read_timeout < client_lifetime.'
+        fail_msg: 'Недопустимый бюджет служб, рабочих процессов, соединений или таймаутов. Проверьте proxy_memory_limits, proxy_max_connections, mtproxy_max_connections и условие read_timeout < client_lifetime.'
+        success_msg: 'Рабочие процессы, соединения и таймауты согласованы с бюджетом памяти.'
 
-    - name: Sum planned memory limits for services deployed on this host
+    - name: "Подсчитать сумму пределов памяти служб узла"
       tags: [always]
       ansible.builtin.set_fact:
         mem_planned_mb: >-
@@ -350,7 +355,7 @@
     # получить согласованный сертификат, а порядок обхода узлов плейбуком не определён —
     # выпуск на upstream оставил бы access без доверенного материала при прогоне,
     # начавшемся с access. Каталог исключён из контроля версий: в нём закрытый ключ.
-    - name: Assert memory plan fits the node
+    - name: "Проверить размещение плана памяти на узле"
       tags: [always]
       ansible.builtin.assert:
         that:
@@ -363,7 +368,7 @@
           Минимумы и явно заданные пределы требуют {{ _proxy_memory_plan.minimum_mb }} МиБ;
           они не снижаются ради размещения на узле.
           Цель RAM/3 — {{ _proxy_budget.target_bytes }} байт;
-          бюджет с учётом минимумов, потолка 1 GB и inventory — {{ _proxy_budget.bytes }} байт;
+          бюджет с учётом минимумов, потолка 1 ГБ и inventory — {{ _proxy_budget.bytes }} байт;
           RAM {{ ansible_memtotal_mb }} МиБ, резерв ОС {{ mem_system_reserved_mb }} МиБ,
           резерв соседей {{ mem_foreign_effective_mb }} МиБ.
           Увеличьте RAM или пересмотрите размещение и явные переопределения пределов,
@@ -375,32 +380,32 @@
           {{ _proxy_memory_plan.limits | dict2items | selectattr('key', 'in', _proxy_enabled_services) | items2dict }}
 
     # Both projects enforce the complete physical-RAM plan.
-    - name: Report the whole-node memory plan
+    - name: "Показать полный план памяти узла"
       tags: [always]
       ansible.builtin.debug:
         msg: >-
-          ai-proxy {{ mem_planned_mb }} MiB; RAM/3 target {{ _proxy_budget.target_bytes }} bytes;
-          service minima/fixed limits {{ _proxy_minimum_plan.minimum_mb }} MiB;
-          project cap {{ _proxy_budget.bytes }} bytes (hard ceiling 1 GB);
-          foreign {{ mem_foreign_effective_mb }} MiB + OS {{ mem_system_reserved_mb }} MiB;
-          host {{ ansible_memtotal_mb }} MiB.
-          {% if 'mtg' in _proxy_enabled_services %}MTProxy effective sessions
-          {{ mtproxy_effective_max_connections }} (inventory ceiling {{ mtproxy_max_connections | default(64) }}).
+          ai-proxy: {{ mem_planned_mb }} МиБ; цель RAM/3: {{ _proxy_budget.target_bytes }} байт;
+          минимумы и фиксированные пределы служб: {{ _proxy_minimum_plan.minimum_mb }} МиБ;
+          потолок проекта: {{ _proxy_budget.bytes }} байт (жёсткий предел 1 ГБ);
+          резерв соседей: {{ mem_foreign_effective_mb }} МиБ; резерв ОС: {{ mem_system_reserved_mb }} МиБ;
+          память узла: {{ ansible_memtotal_mb }} МиБ.
+          {% if 'mtg' in _proxy_enabled_services %}Фактический предел сессий MTProxy:
+          {{ mtproxy_effective_max_connections }} (потолок inventory: {{ mtproxy_max_connections | default(64) }}).
           {% endif %}
-          TLS transit effective sessions {{ proxy_effective_max_connections }}
-          (inventory ceiling {{ proxy_max_connections | default(96) }}), Squid FD {{ squid_fd_limit }}.
+          Фактический предел TLS-сессий участка: {{ proxy_effective_max_connections }}
+          (потолок inventory: {{ proxy_max_connections | default(96) }}); предел FD Squid: {{ squid_fd_limit }}.
 
 
   tasks:
     # Обновление кеша пакетов
-    - name: Update apt cache (Debian family)
+    - name: "Обновить кеш пакетов apt (Debian)"
       ansible.builtin.apt:
         update_cache: true
         cache_valid_time: 3600
       when: ansible_os_family == 'Debian'
 
     # Удаление ненужных пакетов
-    - name: Remove unnecessary packages (Debian family)
+    - name: "Удалить ненужные пакеты (Debian)"
       ansible.builtin.apt:
         name:
           - packagekit
@@ -409,7 +414,7 @@
         purge: true
       when: ansible_os_family == 'Debian'
 
-    - name: Remove unnecessary packages (RHEL family)
+    - name: "Удалить ненужные пакеты (RHEL)"
       ansible.builtin.dnf:
         name:
           - PackageKit
@@ -418,14 +423,14 @@
       when: ansible_os_family == 'RedHat'
 
     # Настройка SSH - отключение DNS lookup для ускорения подключения
-    - name: Disable UseDNS in sshd_config
+    - name: "Отключить UseDNS в конфигурации sshd"
       ansible.builtin.lineinfile:
         path: /etc/ssh/sshd_config
         regexp: '^#?UseDNS\s+'
         line: 'UseDNS no'
         state: present
         validate: '/usr/sbin/sshd -t -f %s'
-      notify: Reload sshd
+      notify: "Перечитать конфигурацию sshd"
 
     # Установка базовых утилит
     # psmisc: killall (используется в keepalived check_and_restart_squid.sh)
@@ -440,7 +445,7 @@
     # Debian 12 и Ubuntu 24.04: `dpkg -L squid` его не содержит) и ставится
     # отдельным пакетом. Без него три метрики неснимаемы, а требование
     # к наблюдаемости выполняется лишь на бумаге.
-    - name: Install base utilities (Debian family)
+    - name: "Установить базовые утилиты (Debian)"
       ansible.builtin.package:
         name:
           - mc
@@ -452,7 +457,7 @@
         state: "{{ pkg_state }}"
       when: ansible_os_family == 'Debian'
 
-    - name: Install base utilities (RHEL family)
+    - name: "Установить базовые утилиты (RHEL)"
       ansible.builtin.dnf:
         name:
           - mc
@@ -463,7 +468,7 @@
         state: "{{ pkg_state }}"
       when: ansible_os_family == 'RedHat'
 
-    - name: Enable and start haveged
+    - name: "Включить автозапуск и запустить haveged"
       ansible.builtin.systemd:
         name: haveged
         enabled: true
@@ -474,19 +479,19 @@
     # в работе. Порог 5.7 — не отраслевой обычай, а измеренное значение: на нём
     # проверены все директивы проекта, включая приём участка под шифрованием,
     # многопроцессный режим и раздельные каталоги кеша.
-    - name: Read installed Squid version
+    - name: "Получить сведения об установленной версии Squid"
       ansible.builtin.command: squid -v
       register: _squid_version_raw
       changed_when: false
       failed_when: false
       check_mode: false
 
-    - name: Determine installed Squid version
+    - name: "Определить установленную версию Squid"
       ansible.builtin.set_fact:
         _squid_version: "{{ (_squid_version_raw.stdout.split('Version ')[1]).split()[0].split('-')[0] }}"
       when: _squid_version_raw.rc == 0 and 'Version ' in _squid_version_raw.stdout
 
-    - name: Assert Squid version is supported
+    - name: "Проверить поддержку установленной версии Squid"
       ansible.builtin.assert:
         that:
           - _squid_version is defined
@@ -500,13 +505,13 @@
           даёт 5.7, Ubuntu 24.04 — 6.14.
         success_msg: >-
           Squid {{ _squid_version }} — поддерживается
-          (не ниже {{ squid_min_version | default('5.7') }})
+          (не ниже {{ squid_min_version | default('5.7') }}).
       when: _squid_version_raw.rc == 0
 
     # Вычисление ресурсных лимитов на основе CPU и RAM
     # CPU: используем все ядра
     # RAM: пределы служб — по бюджету памяти узла (доли и границы заданы в vars)
-    - name: Create local directory for transit TLS material
+    - name: "Создать каталог TLS-материала участка на управляющей машине"
       ansible.builtin.file:
         path: "{{ playbook_dir }}/tls"
         state: directory
@@ -520,7 +525,7 @@
     # по нему Squid проверяет подлинность принимающей стороны (tls-domain).
     # SAN задаётся наравне с CN — проверка только по CN снята в современных
     # реализациях TLS, и без SAN сертификат был бы отвергнут.
-    - name: Issue self-signed certificate for the access → upstream leg
+    - name: "Выпустить самоподписанный сертификат участка access → upstream"
       ansible.builtin.command:
         cmd: >
           openssl req -x509
@@ -536,7 +541,7 @@
       run_once: true
       when: squid_transit_tls | default(false) | bool
 
-    - name: Restrict permissions on the transit private key
+    - name: "Ограничить доступ к приватному ключу участка"
       ansible.builtin.file:
         path: "{{ playbook_dir }}/tls/squid-transit.key"
         mode: '0600'
@@ -548,7 +553,7 @@
     # Проверка непустоты имени: пустое дало бы сертификат без имени и молчаливый
     # отказ проверки подлинности на стороне access — то есть неработающий участок
     # при внешне успешном развёртывании.
-    - name: Assert transit TLS hostname is set
+    - name: "Проверить наличие имени TLS-участка"
       ansible.builtin.assert:
         that:
           - squid_tls_sni is defined
@@ -559,10 +564,10 @@
           а маршрутизатор upstream направляет соединение к терминатору. Имя не обязано
           разрешаться в DNS — оно опознавательное, не адресное; годится, например,
           transit.internal. Задайте его в инвентори рядом с прочими переменными участка.
-        success_msg: "Имя участка задано: {{ squid_tls_sni | default('') }}"
+        success_msg: "Имя участка задано: {{ squid_tls_sni | default('') }}."
       when: squid_transit_tls | default(false) | bool
 
-    - name: Inspect expected password file path
+    - name: "Проверить наличие и свойства локального файла паролей"
       ansible.builtin.stat:
         path: "{{ playbook_dir }}/passwd"
       register: _passwd_stat
@@ -571,7 +576,7 @@
       failed_when: false
       when: proxy_role == 'access' and enable_auth | default(false) | bool
 
-    - name: Report password file path facts
+    - name: "Показать свойства локального файла паролей"
       ansible.builtin.debug:
         msg: >-
           Каталог плейбука: {{ playbook_dir }} ·
@@ -584,7 +589,7 @@
         - proxy_role == 'access' and enable_auth | default(false) | bool
         - not (_passwd_stat.stat.exists | default(false)) or (_passwd_stat.stat.size | default(0) | int) == 0
 
-    - name: Read local password file
+    - name: "Прочитать локальный файл паролей"
       ansible.builtin.slurp:
         src: "{{ playbook_dir }}/passwd"
       register: _passwd_local
@@ -599,7 +604,7 @@
       failed_when: false
       when: proxy_role == 'access' and enable_auth | default(false) | bool
 
-    - name: Assert password file has at least one account
+    - name: "Проверить наличие учётных записей в файле паролей"
       ansible.builtin.assert:
         that:
           - _passwd_local.content is defined
@@ -615,12 +620,12 @@
           без повышения прав. Развернуть без записей можно, но подключиться не смог бы
           никто: сверять пароль не с чем, и все обращения получали бы 407.
           Завести запись: htpasswd -B -C 12 -bn пользователь пароль >> passwd
-        success_msg: "Файл паролей содержит учётные записи"
+        success_msg: "Файл паролей содержит учётные записи."
       delegate_to: localhost
       run_once: true
       when: proxy_role == 'access' and enable_auth | default(false) | bool
 
-    - name: Configure system limits (ulimit)
+    - name: "Настроить системные пределы ulimit"
       ansible.builtin.copy:
         dest: /etc/security/limits.d/99-proxy.conf
         content: |
@@ -640,7 +645,7 @@
     # NOTE: При co-deployment с Matrix — Matrix common role пропускает конфликтующие
     # параметры (ai_proxy_present=true) и задаёт только свои уникальные:
     # vm.swappiness, net.core.rmem_default, net.core.wmem_default
-    - name: Configure sysctl for low latency networking
+    - name: "Настроить сетевые параметры sysctl"
       ansible.posix.sysctl:
         name: "{{ item.name }}"
         value: "{{ item.value }}"
@@ -686,7 +691,7 @@
     # ВАЖНО: upstream-ноды деплоятся первыми (они слушают DNS для access-нод)
     # Порядок: upstreams → access обеспечивается inventory ordering
 
-    - name: Include dns_resolver role
+    - name: "Подключить роль DNS-резолвера"
       ansible.builtin.include_role:
         name: dns_resolver
         apply:
@@ -699,7 +704,7 @@
     # различить «поставили впервые» и «обновили до новой версии» уже нечем —
     # `changed` истинно в обоих случаях. Наличие /etc/squid/squid.conf означает,
     # что пакет на узле уже стоял: файл создаётся установкой пакета.
-    - name: Check whether Squid was present before this run
+    - name: "Проверить наличие Squid до установки пакета"
       ansible.builtin.stat:
         path: "{{ squid_config_path }}"
       register: _squid_present_before
@@ -707,7 +712,7 @@
     # Обновление Squid перезапускает службу силами postinst-сценария пакета:
     # текущие клиентские сеансы рвутся. `throttle: 1` разводит это по узлам во
     # времени — при паре access-нод под VIP хотя бы одна остаётся рабочей.
-    - name: Install Squid
+    - name: "Установить Squid"
       ansible.builtin.package:
         name: squid
         state: "{{ pkg_state }}"
@@ -721,7 +726,7 @@
     # Прежняя редакция гейта (`squid_installed.changed`) при переходе на
     # обновления останавливала бы Squid при каждой новой версии в репозитории,
     # а обратный запуск ждал бы конца фазы файрвола — узел стоял бы всю фазу.
-    - name: Stop Squid after fresh install (config not ready yet)
+    - name: "Остановить новый Squid до подготовки конфигурации"
       ansible.builtin.systemd:
         name: squid
         state: stopped
@@ -731,7 +736,7 @@
 
     # systemd override для Squid - лимиты файловых дескрипторов
     # (limits.conf не работает для systemd сервисов)
-    - name: Create systemd override directory for Squid
+    - name: "Создать каталог переопределений systemd для Squid"
       ansible.builtin.file:
         path: /etc/systemd/system/squid.service.d
         state: directory
@@ -739,7 +744,7 @@
         group: root
         mode: '0755'
 
-    - name: Configure systemd limits for Squid
+    - name: "Настроить пределы systemd для Squid"
       ansible.builtin.copy:
         dest: /etc/systemd/system/squid.service.d/limits.conf
         content: |
@@ -757,12 +762,12 @@
         mode: '0644'
       register: squid_systemd_override
 
-    - name: Reload systemd after Squid override change
+    - name: "Перечитать конфигурацию systemd после настройки Squid"
       ansible.builtin.systemd:
         daemon_reload: true
       when: squid_systemd_override.changed | default(false)
 
-    - name: Ensure Squid directories exist
+    - name: "Создать рабочие каталоги Squid"
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
@@ -776,7 +781,7 @@
     # Определяем, работает ли nginx с виртуалхостом на порту 443.
     # Если да — Squid слушает на 127.0.0.1:3128 (nginx терминирует TLS и проксирует).
     # Ручное переопределение: behind_nginx=true/false в inventory.
-    - name: Detect nginx with active virtual host on port 443
+    - name: "Проверить наличие nginx на порту 443"
       ansible.builtin.shell: |
         set -o pipefail
         if systemctl is-active --quiet nginx 2>/dev/null && \
@@ -791,7 +796,7 @@
       changed_when: false
       tags: [nginx]
 
-    - name: Set nginx_on_443 fact (auto-detect or manual override)
+    - name: "Определить работу Squid за nginx с учётом inventory"
       ansible.builtin.set_fact:
         nginx_on_443: "{{ behind_nginx | default(mtproxy_enabled | default(false) | bool or _nginx_443_detect.stdout | trim | bool) }}"
       tags: [nginx]
@@ -800,7 +805,7 @@
     # Phase: Firewall detection (before roles that need it)
     # ===========================================================================
 
-    - name: Check if ufw is active
+    - name: "Проверить состояние UFW"
       ansible.builtin.shell: |
         ufw status 2>/dev/null | grep -q '^Status: active' && echo 'active' || echo 'inactive'
       register: ufw_status
@@ -817,7 +822,7 @@
     # Роль MTProxy (upstream): ставит nginx, настраивает маршрутизацию по имени SNI
     # на порту 443, удаляет включённый по умолчанию сайт nginx (освобождая порт 80
     # соседним проектам), разворачивает mtg.
-    - name: Include mtproxy role
+    - name: "Подключить роль MTProxy"
       ansible.builtin.include_role:
         name: mtproxy
         apply:
@@ -829,7 +834,7 @@
 
     # nginx role (access): устанавливает nginx на :443, переконфигурирует Squid
     # за nginx (с rollback при ошибке). Деплоит squid-access.conf внутри роли.
-    - name: Include nginx role for SNI routing
+    - name: "Подключить роль nginx для маршрутизации SNI"
       ansible.builtin.include_role:
         name: nginx
         apply:
@@ -846,7 +851,7 @@
     # и его настроек выступает этот проект, поэтому предел ставит он. Имя файла
     # несёт префикс проекта: соседний проект свой предел на общем узле не ставит.
 
-    - name: Create systemd override directory for nginx
+    - name: "Создать каталог переопределений systemd для nginx"
       ansible.builtin.file:
         path: /etc/systemd/system/nginx.service.d
         state: directory
@@ -855,14 +860,14 @@
         mode: '0755'
       when: _proxy_nginx_needed | bool
 
-    - name: Remove the obsolete Matrix cap when taking ownership of shared nginx
+    - name: "Удалить устаревший предел Matrix для общего nginx"
       ansible.builtin.file:
         path: /etc/systemd/system/nginx.service.d/memory-limit.conf
         state: absent
       when: _proxy_nginx_needed | bool
-      notify: Reload systemd
+      notify: "Перечитать конфигурацию systemd"
 
-    - name: Configure memory limit for nginx
+    - name: "Настроить предел памяти nginx"
       ansible.builtin.copy:
         dest: /etc/systemd/system/nginx.service.d/10-aiproxy-memory.conf
         content: |
@@ -873,9 +878,9 @@
         group: root
         mode: '0644'
       when: _proxy_nginx_needed | bool
-      notify: Reload systemd
+      notify: "Перечитать конфигурацию systemd"
 
-    - name: Create systemd override directory for unbound
+    - name: "Создать каталог переопределений systemd для Unbound"
       ansible.builtin.file:
         path: /etc/systemd/system/unbound.service.d
         state: directory
@@ -884,7 +889,7 @@
         mode: '0755'
 
     # Размеры кешей unbound рассчитаны от этого же предела (роль dns_resolver)
-    - name: Configure memory limit for unbound
+    - name: "Настроить предел памяти Unbound"
       ansible.builtin.copy:
         dest: /etc/systemd/system/unbound.service.d/memory-limit.conf
         content: |
@@ -894,7 +899,7 @@
         owner: root
         group: root
         mode: '0644'
-      notify: Reload systemd
+      notify: "Перечитать конфигурацию systemd"
 
     # ===========================================================================
     # Phase: Squid configuration
@@ -906,7 +911,7 @@
     # Upstream получает сертификат И ключ — он принимающая сторона; access получает
     # только сертификат, и служит тот доверенным якорем (tls-cafile), а не средством
     # представиться. Закрытый ключ на access не нужен и потому не передаётся.
-    - name: Deliver transit certificate and key to the receiving side
+    - name: "Разместить сертификат и ключ участка на принимающем узле"
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/tls/squid-transit.{{ item.ext }}"
         dest: "{{ item.dest }}"
@@ -921,9 +926,9 @@
       when:
         - squid_transit_tls | default(false) | bool
         - proxy_role == 'upstream'
-      notify: Reload Squid
+      notify: "Перечитать конфигурацию Squid"
 
-    - name: Deliver transit certificate to the initiating side as a trust anchor
+    - name: "Разместить доверенный сертификат участка на исходящем узле"
       ansible.builtin.copy:
         src: "{{ playbook_dir }}/tls/squid-transit.crt"
         dest: /etc/squid/upstream-transit-ca.crt
@@ -933,11 +938,11 @@
       when:
         - squid_transit_tls | default(false) | bool
         - proxy_role == 'access'
-      notify: Reload Squid
+      notify: "Перечитать конфигурацию Squid"
 
     # Конфигурация для access прокси (только если MTProxy отключён)
     # При включённом MTProxy deploy squid config происходит в роли nginx
-    - name: Deploy Squid config (access proxy, without MTProxy)
+    - name: "Разместить конфигурацию Squid на access без MTProxy"
       ansible.builtin.template:
         src: templates/squid-access.conf.j2
         dest: "{{ squid_config_path }}"
@@ -953,7 +958,7 @@
     # Роль mtproxy удаляет включённый по умолчанию сайт nginx, освобождая 80 для
     # соседних проектов — им он нужен для проверки владения доменом при выпуске
     # сертификатов.
-    - name: Deploy Squid config (upstream proxy)
+    - name: "Разместить конфигурацию Squid на upstream"
       ansible.builtin.template:
         src: templates/squid-upstream.conf.j2
         dest: "{{ squid_config_path }}"
@@ -965,7 +970,7 @@
       register: squid_config_upstream
 
     # Копирование файла паролей (только access, до reload/restart)
-    - name: Deploy passwd file (access only)
+    - name: "Разместить файл паролей Squid на access"
       ansible.builtin.copy:
         src: passwd
         dest: "{{ squid_passwd_path }}"
@@ -973,7 +978,7 @@
         group: proxy
         mode: '0640'
       when: proxy_role == 'access' and enable_auth
-      notify: Reload Squid
+      notify: "Перечитать конфигурацию Squid"
       tags: passwd
 
     # Очистка журналов при отключении логирования.
@@ -981,7 +986,7 @@
     # создать заново» рапортовал changed при каждом прогоне независимо от того,
     # было ли что удалять. Вечное changed обесценивает обнаружение расхождений,
     # шумит в сухом прогоне и способно ложно возбуждать обработчики.
-    - name: Find leftover Squid log files when logging is disabled
+    - name: "Найти остатки журналов Squid при отключённом журналировании"
       ansible.builtin.find:
         paths: /var/log/squid
         patterns: "*"
@@ -991,7 +996,7 @@
       failed_when: false
       when: not (enable_logging | default(true) | bool)
 
-    - name: Remove leftover Squid log files
+    - name: "Удалить остатки журналов Squid"
       ansible.builtin.file:
         path: "{{ item.path }}"
         state: absent
@@ -1001,7 +1006,7 @@
       when: not (enable_logging | default(true) | bool)
 
     # Сам каталог сохраняется: Squid ожидает его существования при запуске.
-    - name: Ensure Squid log directory exists with expected ownership
+    - name: "Создать каталог журналов Squid с нужным владельцем"
       ansible.builtin.file:
         path: /var/log/squid
         state: directory
@@ -1010,7 +1015,7 @@
         mode: '0755'
       when: not (enable_logging | default(true) | bool)
 
-    - name: Apply Squid configuration with startup parameter tracking
+    - name: "Применить конфигурацию Squid с учётом параметров запуска"
       ansible.builtin.include_tasks: tasks/squid-apply.yml
 
     # =======================================================================
@@ -1025,12 +1030,12 @@
     # copytruncate, а не создание нового файла: Squid держит журнал открытым и без
     # переоткрытия продолжал бы писать в переименованный. Штатный сигнал переоткрытия
     # (squid -k rotate) сцеплен с внутренним счётчиком ротаций, отключённым здесь.
-    - name: Remove the obsolete duplicate Squid logrotate rule
+    - name: "Удалить устаревшее дублирующее правило ротации журналов Squid"
       ansible.builtin.file:
         path: /etc/logrotate.d/squid-aiproxy
         state: absent
 
-    - name: Deploy logrotate rule for Squid logs
+    - name: "Разместить правило ротации журналов Squid"
       ansible.builtin.template:
         src: templates/logrotate-squid.j2
         dest: /etc/logrotate.d/squid
@@ -1044,23 +1049,23 @@
     # ===========================================================================
 
     # Настройка firewall (upstream) - UFW (если ufw активен)
-    - name: Configure UFW for upstream proxy
+    - name: "Настроить UFW на upstream"
       when: proxy_role == 'upstream' and ufw_status.stdout | default('') == 'active'
       block:
         # Обновление ufw безопасно: правила хранятся в /etc/ufw и переживают
         # смену версии, а служба лишь применяет их заново при перезапуске.
-        - name: Install UFW
+        - name: "Установить UFW"
           ansible.builtin.package:
             name: ufw
             state: "{{ pkg_state }}"
 
-        - name: Allow SSH (UFW)
+        - name: "Разрешить SSH в UFW"
           community.general.ufw:
             rule: allow
             port: '22'
             proto: tcp
 
-        - name: Allow Squid only from access proxies (UFW)
+        - name: "Разрешить Squid только для access в UFW"
           community.general.ufw:
             rule: allow
             port: "{{ squid_port }}"
@@ -1068,10 +1073,10 @@
             from_ip: "{{ hostvars[item]['ansible_host'] }}"
           loop: "{{ groups['access_proxies'] }}"
 
-        # Migration: remove old Squid UFW rule for port 443
+        # Удалить устаревшее правило UFW для Squid на порту 443
         # (Squid moved from behind nginx:443 to dedicated port)
         # Не удаляем если MTProxy включён — порт 443 используется для SNI router
-        - name: "Migration: remove old Squid UFW rule for port 443"
+        - name: "Удалить устаревшее правило UFW для Squid на порту 443"
           community.general.ufw:
             rule: allow
             port: '443'
@@ -1082,7 +1087,7 @@
           failed_when: false
           when: squid_port | string != '443' and not (mtproxy_enabled | default(false) | bool)
 
-        - name: Allow MTProxy TLS from access proxies (UFW)
+        - name: "Разрешить TLS MTProxy для access в UFW"
           community.general.ufw:
             rule: allow
             from_ip: "{{ hostvars[item]['ansible_host'] }}"
@@ -1094,7 +1099,7 @@
 
         # DNS-резолвер upstream доступен только access-нодам.
         # item.0 — IP клиента из dns_allowed_clients, item.1 — транспорт (tcp/udp)
-        - name: Allow DNS (unbound) from access proxies (UFW)
+        - name: "Разрешить DNS Unbound для access в UFW"
           community.general.ufw:
             rule: allow
             port: '53'
@@ -1105,7 +1110,7 @@
         # Явный отказ прочим источникам. Дублирует default deny incoming, но
         # переживает ручную смену политики по умолчанию и делает ограничение
         # видимым в `ufw status`. Порядок важен: правило добавляется ПОСЛЕ allow.
-        - name: Deny DNS from all other sources (UFW)
+        - name: "Запретить DNS для остальных источников в UFW"
           community.general.ufw:
             rule: deny
             port: '53'
@@ -1115,21 +1120,21 @@
             - tcp
             - udp
 
-        - name: Enable UFW with default deny
+        - name: "Включить UFW с запретом входящих соединений по умолчанию"
           community.general.ufw:
             state: enabled
             default: deny
             direction: incoming
 
-        - name: Record firewall backend enforcing DNS restriction (UFW)
+        - name: "Сохранить UFW как механизм ограничения DNS"
           ansible.builtin.set_fact:
             dns_firewall_backend: ufw
 
     # Настройка firewall (upstream) - nftables (Debian без ufw)
-    - name: Prepare the shared firewall integration
+    - name: "Подготовить интеграцию межсетевого экрана с соседними проектами"
       ansible.builtin.include_tasks: tasks/shared-firewall.yml
 
-    - name: Configure nftables for upstream proxy (Debian)
+    - name: "Настроить nftables на upstream (Debian)"
       when: proxy_role == 'upstream' and ansible_distribution == 'Debian' and ufw_status.stdout | default('') != 'active'
       block:
         # ЕДИНСТВЕННОЕ исключение из режима обновления, и вот почему.
@@ -1140,25 +1145,25 @@
         # restart. Обновление nftables — операция планового окна, выполняется
         # оператором вручную вместе со сверкой действующих правил после неё.
         # Уязвимости пакета закрывает unattended-upgrades (только security).
-        - name: Install nftables
+        - name: "Установить nftables"
           ansible.builtin.package:
             name: nftables
             state: present
 
-        - name: Check whether the shared nftables table already exists
+        - name: "Проверить наличие общей таблицы nftables"
           ansible.builtin.command: nft -j list table inet filter
           register: _proxy_existing_nft_table
           changed_when: false
           failed_when: false
           check_mode: false
 
-        - name: Read the previous owner nftables configuration
+        - name: "Прочитать прежнюю конфигурацию владельца nftables"
           ansible.builtin.slurp:
             src: /etc/nftables.conf
           register: _proxy_existing_nft_config
           failed_when: false
 
-        - name: Refuse to take over an unowned nftables table
+        - name: "Проверить принадлежность общей таблицы nftables"
           ansible.builtin.assert:
             that:
               - >-
@@ -1169,10 +1174,11 @@
                  (_proxy_existing_nft_config.content | default('') | b64decode)) or
                 (_proxy_existing_nft_table.stdout | nft_empty_default_table)
             fail_msg: >-
-              Existing inet filter is not managed by ai-proxy. Refusing to replace
-              its reserved input/forward/output chains; integrate the host firewall first.
+              Существующая таблица inet filter не принадлежит ai-proxy. Замена её
+              цепочек input/forward/output запрещена; сначала согласуйте интеграцию межсетевого экрана узла.
+            success_msg: 'Таблица inet filter отсутствует, принадлежит ai-proxy или содержит только пустые стандартные цепочки.'
 
-        - name: Deploy nftables config
+        - name: "Разместить конфигурацию nftables"
           ansible.builtin.template:
             src: templates/nftables-upstream.conf.j2
             dest: /etc/nftables.conf
@@ -1180,15 +1186,15 @@
             group: root
             mode: '0644'
             validate: '/usr/sbin/nft -c -f %s'
-          notify: Reload nftables
+          notify: "Перечитать конфигурацию nftables"
 
-        - name: Enable and start nftables
+        - name: "Включить автозапуск и запустить nftables"
           ansible.builtin.systemd:
             name: nftables
             enabled: true
             state: started
 
-        - name: Record firewall backend enforcing DNS restriction (nftables)
+        - name: "Сохранить nftables как механизм ограничения DNS"
           ansible.builtin.set_fact:
             dns_firewall_backend: nftables
 
@@ -1196,7 +1202,7 @@
     # Ветка покрывает Ubuntu с неактивным ufw (состояние после чистой установки)
     # и RHEL-семейство. Имя цепочки историческое: она фильтрует все входящие
     # сервисы upstream-ноды — Squid, MTProxy (443) и DNS (53).
-    - name: Configure iptables for upstream proxy (custom chain)
+    - name: "Настроить отдельную цепочку iptables на upstream"
       when: proxy_role == 'upstream' and ansible_distribution != 'Debian' and ufw_status.stdout | default('') != 'active'
       vars:
         squid_chain: SQUID-PROXY
@@ -1210,12 +1216,12 @@
         # Восстановлением своей цепочки занимается юнит aiproxy-firewall ниже.
         # Обновление iptables безопасно: пакет не несёт службы, действующие
         # правила живут в ядре и сменой версии утилиты не затрагиваются.
-        - name: Install iptables
+        - name: "Установить iptables"
           ansible.builtin.package:
             name: iptables
             state: "{{ pkg_state }}"
 
-        - name: Ensure iptables ruleset directory exists
+        - name: "Создать каталог правил iptables"
           ansible.builtin.file:
             path: "{{ iptables_rules_path | dirname }}"
             state: directory
@@ -1225,7 +1231,7 @@
 
         # Весь набор правил цепочки — одним файлом; он же источник для
         # восстановления при загрузке. validate проверяет разбор до применения.
-        - name: Deploy IPv4 and IPv6 rulesets for the custom chain
+        - name: "Разместить правила отдельной цепочки для IPv4 и IPv6"
           ansible.builtin.template:
             src: '{{ item.template }}'
             dest: '{{ item.path }}'
@@ -1242,7 +1248,7 @@
         # а цепочки co-deployment проектов и правила INPUT остаются нетронутыми.
         # Изменение определяется сравнением цепочки до и после — команда идемпотентна
         # по результату, но не по факту запуска.
-        - name: Apply custom chain atomically (foreign chains untouched)
+        - name: "Атомарно применить отдельную цепочку с сохранением чужих правил"
           ansible.builtin.shell: |
             set -e
             before=$({{ item.command }} -S {{ squid_chain }} 2>/dev/null || true)
@@ -1257,7 +1263,7 @@
             - {command: iptables, path: '{{ iptables_rules_path }}'}
             - {command: ip6tables, path: /etc/iptables/aiproxy-upstream-v6.rules}
 
-        - name: Check if jump to custom chain exists in INPUT
+        - name: "Проверить переход из INPUT в отдельную цепочку"
           ansible.builtin.shell: |
             {{ item }} -C INPUT -j {{ squid_chain }} 2>/dev/null && echo 'exists' || echo 'missing'
           register: chain_jump_check
@@ -1265,7 +1271,7 @@
           failed_when: false
           loop: [iptables, ip6tables]
 
-        - name: Add jump to custom chain at the beginning of INPUT
+        - name: "Добавить переход в отдельную цепочку в начало INPUT"
           ansible.builtin.shell: |
             {{ item.item }} --wait 10 -I INPUT 1 -j {{ squid_chain }}
           when: item.stdout == 'missing'
@@ -1274,7 +1280,7 @@
         # Восстановление при загрузке — только своей цепочки и своего перехода из
         # INPUT. Полное восстановление ruleset (iptables-persistent) здесь запрещено
         # правилом co-deployment: оно вернуло бы и чужие правила из нашего снимка.
-        - name: Deploy boot-time restore unit for the custom chain
+        - name: "Разместить службу восстановления отдельной цепочки при загрузке"
           ansible.builtin.copy:
             dest: /etc/systemd/system/aiproxy-firewall.service
             owner: root
@@ -1299,17 +1305,17 @@
               WantedBy=multi-user.target
           register: aiproxy_fw_unit
 
-        - name: Reload systemd after firewall unit change
+        - name: "Перечитать конфигурацию systemd после настройки межсетевого экрана"
           ansible.builtin.systemd:
             daemon_reload: true
           when: aiproxy_fw_unit.changed
 
-        - name: Enable boot-time restore of the custom chain
+        - name: "Включить восстановление отдельной цепочки при загрузке"
           ansible.builtin.systemd:
             name: aiproxy-firewall
             enabled: true
 
-        - name: Record firewall backend enforcing DNS restriction (iptables)
+        - name: "Сохранить iptables как механизм ограничения DNS"
           ansible.builtin.set_fact:
             dns_firewall_backend: iptables
 
@@ -1319,20 +1325,20 @@
     # Проверка читает ДЕЙСТВУЮЩИЕ правила ядра, а не шаблон: иначе «правило
     # написано» неотличимо от «правило применено». Handlers сбрасываются заранее —
     # без этого при изменении конфигурации nftables сверялась бы прежняя загрузка.
-    # Только для upstream: на access-нодах в очереди может стоять Reload Squid,
+    # Только для upstream: на access-нодах в очереди может стоять Перечитать конфигурацию Squid,
     # а Squid там запускается позже по ходу плейбука.
 
-    - name: Apply pending firewall changes before verification
+    - name: "Применить ожидающие изменения межсетевого экрана перед проверкой"
       ansible.builtin.meta: flush_handlers
       when: proxy_role == 'upstream'
 
-    - name: Verify DNS restriction on upstream
+    - name: "Проверить ограничение доступа к DNS на upstream"
       when: proxy_role == 'upstream'
       tags: [firewall, dns]
       block:
         # Дамп всех трёх бэкендов сразу: какой из них реально применён,
         # определяется дистрибутивом и состоянием ufw
-        - name: Collect effective firewall rules (all backends)
+        - name: "Получить действующие правила всех механизмов межсетевого экрана"
           ansible.builtin.shell: |
             nft list table inet filter 2>/dev/null || true
             ufw status verbose 2>/dev/null || true
@@ -1342,7 +1348,7 @@
           register: dns_fw_dump
           changed_when: false
 
-        - name: Assert DNS (53/tcp+udp) is restricted to access proxies
+        - name: "Проверить ограничение DNS на порту 53 TCP/UDP адресами access"
           ansible.builtin.assert:
             that:
               - dns_firewall_backend is defined
@@ -1350,11 +1356,11 @@
               - dns_allowed_clients | reject('in', dns_fw_dump.stdout) | list | length == 0
             fail_msg: >-
               Ограничение доступа к DNS (53/tcp+udp) не найдено в действующих правилах
-              firewall (бэкенд: {{ dns_firewall_backend | default('не определён') }}).
+              межсетевого экрана (механизм: {{ dns_firewall_backend | default('не определён') }}).
               Резолвер unbound на {{ ansible_host }}:53 остаётся доступен посторонним.
             success_msg: >-
               DNS (53/tcp+udp) ограничен access-нодами
-              [{{ dns_allowed_clients | join(', ') }}], бэкенд: {{ dns_firewall_backend }}
+              [{{ dns_allowed_clients | join(', ') }}], механизм: {{ dns_firewall_backend }}.
 
     # ===========================================================================
     # Phase: автоматические обновления безопасности (unattended-upgrades)
@@ -1374,13 +1380,13 @@
     # Автоматическая перезагрузка запрещена: узел с VIP, уходящий в ребут сам по
     # себе, ломает VRRP-переключение непредсказуемо для оператора. Перезагрузка
     # после обновления ядра — ручная операция планового окна.
-    - name: Install unattended-upgrades (Debian family)
+    - name: "Установить unattended-upgrades (Debian)"
       ansible.builtin.package:
         name: unattended-upgrades
         state: "{{ pkg_state }}"
       when: ansible_os_family == 'Debian'
 
-    - name: Enable periodic unattended upgrades
+    - name: "Включить периодические автоматические обновления"
       ansible.builtin.copy:
         dest: /etc/apt/apt.conf.d/20auto-upgrades
         owner: root
@@ -1396,7 +1402,7 @@
     # 50unattended-upgrades не правим, чтобы обновление самого пакета не
     # порождало конфликт conffile. Файлы apt.conf.d читаются по возрастанию
     # имени, и «52…» читается после «50…» — наши значения побеждают.
-    - name: Restrict unattended upgrades to security updates only
+    - name: "Ограничить автоматические обновления исправлениями безопасности"
       ansible.builtin.copy:
         dest: /etc/apt/apt.conf.d/52aiproxy-unattended-upgrades
         owner: root
@@ -1422,20 +1428,20 @@
           Unattended-Upgrade::Automatic-Reboot "false";
       when: ansible_os_family == 'Debian'
 
-    - name: Enable and start Squid
+    - name: "Включить автозапуск и запустить Squid"
       ansible.builtin.systemd:
         name: squid
         enabled: true
         state: started
 
-    - name: Deploy local service health monitoring
+    - name: "Настроить локальную проверку работоспособности служб"
       ansible.builtin.include_tasks: tasks/health.yml
 
     # ===========================================================================
     # Phase: Keepalived (access proxies only, VRRP failover)
     # ===========================================================================
 
-    - name: Skip Keepalived - VIP not configured
+    - name: "Сообщить о пропуске Keepalived без VIP"
       ansible.builtin.debug:
         msg: "Keepalived пропущен: переменная keepalived_vip не задана в inventory. Для включения VRRP укажите keepalived_vip."
       when: proxy_role == 'access' and enable_keepalived | default(false) and keepalived_vip is not defined
@@ -1445,14 +1451,14 @@
     # штатно, одновременное на обеих нодах — отказ VIP целиком, потому что
     # объявлять адрес станет некому. `throttle: 1` не даёт задаче выполниться
     # более чем на одном узле разом.
-    - name: Install Keepalived (access proxy only)
+    - name: "Установить Keepalived на access"
       ansible.builtin.package:
         name: keepalived
         state: "{{ pkg_state }}"
       when: proxy_role == 'access' and enable_keepalived | default(false) and keepalived_vip is defined
       throttle: 1
 
-    - name: Deploy Squid health-check script (auto-restart with cooldown)
+    - name: "Разместить проверку Squid с ограничением частоты перезапусков"
       ansible.builtin.template:
         src: templates/check_and_restart_squid.sh.j2
         dest: /etc/keepalived/check_and_restart_squid.sh
@@ -1460,9 +1466,9 @@
         group: root
         mode: '0755'
       when: proxy_role == 'access' and enable_keepalived | default(false) and keepalived_vip is defined
-      notify: Restart Keepalived
+      notify: "Перезапустить Keepalived"
 
-    - name: Deploy Keepalived config (access proxy only)
+    - name: "Разместить конфигурацию Keepalived на access"
       ansible.builtin.template:
         src: templates/keepalived.conf.j2
         dest: /etc/keepalived/keepalived.conf
@@ -1470,9 +1476,9 @@
         group: root
         mode: '0644'
       when: proxy_role == 'access' and enable_keepalived | default(false) and keepalived_vip is defined
-      notify: Restart Keepalived
+      notify: "Перезапустить Keepalived"
 
-    - name: Enable IP forwarding for VRRP
+    - name: "Разрешить привязку к нелокальному VIP для VRRP"
       ansible.posix.sysctl:
         name: net.ipv4.ip_nonlocal_bind
         value: '1'
@@ -1481,7 +1487,7 @@
         reload: true
       when: proxy_role == 'access' and enable_keepalived | default(false) and keepalived_vip is defined
 
-    - name: Enable and start Keepalived
+    - name: "Включить автозапуск и запустить Keepalived"
       ansible.builtin.systemd:
         name: keepalived
         enabled: true
@@ -1492,28 +1498,28 @@
     # Phase: CrowdSec IPS (Intrusion Prevention System)
     # ===========================================================================
 
-    - name: Include CrowdSec role
+    - name: "Подключить роль CrowdSec"
       ansible.builtin.include_role:
         name: crowdsec
       when: crowdsec_enabled | default(false) | bool
       tags: [crowdsec, security]
 
-    - name: Record the active firewall backend for shared services
+    - name: "Сохранить механизм межсетевого экрана для общих служб"
       ansible.builtin.copy:
         dest: /etc/shared-host/aiproxy-firewall-backend
         mode: '0644'
         content: "{{ 'ufw' if ufw_status.stdout | default('') == 'active' else dns_firewall_backend | default('unsupported') }}\n"
 
-    - name: Apply the persistent shared services port contract
+    - name: "Применить сохранённые правила портов общих служб"
       ansible.builtin.command: /usr/local/sbin/aiproxy-apply-shared-ports
       register: _shared_ports_applied
       changed_when: "'CHANGED' in _shared_ports_applied.stdout"
       when: not ansible_check_mode
 
-    - name: Apply pending configuration handlers before resource migration
+    - name: "Выполнить ожидающие обработчики перед переносом служб в общий бюджет"
       ansible.builtin.meta: flush_handlers
 
-    - name: Enforce the complete project resource budget
+    - name: "Применить полный бюджет ресурсов проекта"
       ansible.builtin.include_tasks: tasks/resource-limits.yml
 
   handlers:
@@ -1521,22 +1527,22 @@
     # (требуется логика выбора действия на основе изменённых параметров).
     # Handler ниже — для простого reload (passwd, ACL и т.д.)
 
-    - name: Reload Squid
+    - name: "Перечитать конфигурацию Squid"
       ansible.builtin.systemd:
         name: squid
         state: reloaded
       tags: always
 
-    - name: Reload systemd
+    - name: "Перечитать конфигурацию systemd"
       ansible.builtin.systemd:
         daemon_reload: true
 
-    - name: Reload sshd
+    - name: "Перечитать конфигурацию sshd"
       ansible.builtin.systemd:
         name: "{{ 'ssh' if ansible_os_family == 'Debian' else 'sshd' }}"
         state: reloaded
 
-    - name: Restart Keepalived
+    - name: "Перезапустить Keepalived"
       ansible.builtin.systemd:
         name: keepalived
         state: restarted
@@ -1545,7 +1551,7 @@
     # restart снимает и таблицы CrowdSec bouncer, а при ошибке в конфигурации
     # оставляет ноду вообще без правил. Reload применяет /etc/nftables.conf одной
     # транзакцией: при ошибке действуют прежние правила.
-    - name: Reload nftables
+    - name: "Перечитать конфигурацию nftables"
       ansible.builtin.systemd:
         name: nftables
         state: reloaded

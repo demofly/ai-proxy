@@ -1,11 +1,11 @@
 ---
-- name: Deploy a bounded local Squid application health check
+- name: "Разместить локальную проверку готовности Squid"
   ansible.builtin.template:
     src: '{{ playbook_dir }}/templates/aiproxy-health.sh.j2'
     dest: /usr/local/sbin/aiproxy-check-squid
     mode: '0755'
 
-- name: Deploy Squid health service and timer
+- name: "Разместить службу и таймер проверки Squid"
   ansible.builtin.copy:
     dest: '/etc/systemd/system/{{ item.name }}'
     mode: '0644'
@@ -35,7 +35,7 @@
   loop_control:
     label: '{{ item.name }}'
 
-- name: Enable periodic local health monitoring
+- name: "Включить периодическую локальную проверку работоспособности"
   ansible.builtin.systemd:
     name: aiproxy-health.timer
     daemon_reload: true
