@@ -6,6 +6,8 @@
 - name: "Развернуть ai-proxy на базе Squid"
   hosts: all
   become: true
+  # All ACME HTTP responders must be loaded before any node requests a certificate.
+  strategy: linear
 
   vars:
     squid_config_path: /etc/squid/squid.conf
@@ -90,8 +92,22 @@
         fail_msg: >-
           Автоматический ACME требует включённый HTTPS-прокси, контактный email,
           абсолютный webroot без пробелов и стандартные пути Let’s Encrypt.
-          Все A/AAAA имени должны вести на этот узел с доступным портом 80.
+          Все A/AAAA имени должны вести на подготовленные access с доступным портом 80.
         success_msg: "Параметры выпуска сертификата HTTPS-прокси проверены."
+      when: https_proxy_acme_enabled | default(false) | bool
+      tags: [always]
+
+    - name: "Определить участников ACME для общего HTTPS-имени"
+      ansible.builtin.set_fact:
+        _https_proxy_acme_cluster: "{{ groups.get('access_proxies', []) | https_proxy_acme_cluster(hostvars, inventory_hostname) }}"
+      when: https_proxy_acme_enabled | default(false) | bool
+      tags: [always]
+
+    - name: "Проверить состав участников ACME"
+      ansible.builtin.assert:
+        that: _https_proxy_acme_cluster.error == ''
+        fail_msg: "{{ _https_proxy_acme_cluster.error }}"
+        success_msg: "Участников ACME для общего HTTPS-имени: {{ _https_proxy_acme_cluster.nodes | length }}."
       when: https_proxy_acme_enabled | default(false) | bool
       tags: [always]
 

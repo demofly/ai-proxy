@@ -1,13 +1,47 @@
 # {{ ansible_managed }}
 # Named ACME vhost; default HTTP sites remain owned by their projects.
+{% set peers = _https_proxy_acme_cluster.peers | default([]) %}
+{% if peers %}
+upstream aiproxy_acme_peers {
+{% for peer in peers %}
+    server {{ peer.endpoint }};
+{% endfor %}
+}
+{% endif %}
+
 server {
     listen 80;
     listen [::]:80;
     server_name {{ https_proxy_hostname }};
+    add_header Cache-Control "no-store" always;
     location ^~ /.well-known/acme-challenge/ {
         root {{ https_proxy_acme_webroot | default('/var/www/certbot') }};
         default_type text/plain;
-        try_files $uri =404;
+        open_file_cache off;
+        limit_except GET { deny all; }
+        try_files $uri {{ '@aiproxy_acme_peer' if peers else '=404' }};
     }
+{% if peers %}
+    location @aiproxy_acme_peer {
+        # A peer may serve its own token, but may never forward the miss again.
+        if ($http_x_aiproxy_acme_hop != "") { return 404; }
+        proxy_pass http://aiproxy_acme_peers;
+        proxy_set_header Host {{ https_proxy_hostname }};
+        proxy_set_header X-AIProxy-ACME-Hop 1;
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+        proxy_hide_header Cache-Control;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 5s;
+        proxy_send_timeout 5s;
+        proxy_next_upstream error timeout invalid_header http_404 http_502 http_503 http_504;
+        proxy_next_upstream_tries {{ peers | length }};
+        proxy_next_upstream_timeout 10s;
+        proxy_buffering off;
+        proxy_cache off;
+    }
+{% endif %}
     location / { return 404; }
 }

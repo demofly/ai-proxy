@@ -321,20 +321,62 @@ AIPROXY_TEST_SQUID=/usr/sbin/squid python3 -m unittest discover -s tests -p test
 Windows/Firefox → access включите отдельный HTTPS-вход на том же публичном 443:
 
 ```yaml
-# Параметры одного узла в access_proxies.hosts; имя должно вести только на него.
-https_proxy_enabled: true
-https_proxy_hostname: proxy.example.com
-https_proxy_acme_enabled: true
-https_proxy_acme_email: admin@example.com
+# Фрагмент inventory.yml: одинаковые параметры на обоих access.
+all:
+  children:
+    access_proxies:
+      hosts:
+        access-01:
+          ansible_host: 203.0.113.1
+        access-02:
+          ansible_host: 203.0.113.2
+      vars:
+        proxy_role: access
+        enable_auth: true
+        behind_nginx: true
+        https_proxy_enabled: true
+        https_proxy_hostname: proxy.example.com
+        https_proxy_acme_enabled: true
+        https_proxy_acme_email: admin@example.com
 ```
 
-Все A/AAAA этого имени должны указывать на выбранный access. Для HTTP-01 нужен
-доступный порт 80. Certbot использует отдельный именной HTTP-сайт в
+Имя может иметь два A-адреса или A/AAAA нескольких подготовленных access.
+На каждом нужен доступный извне и со стороны соседей порт 80. Certbot использует отдельный именной HTTP-сайт в
 `/etc/nginx/conf.d/aiproxy-https-acme.conf`, webroot `/var/www/certbot` и стандартные
 пути `/etc/letsencrypt/live/<имя>/`. Default HTTP-сайты соседних проектов сохраняются.
 Таймер Certbot продлевает сертификат, собственный deploy-hook проверяет nginx
-и выполняет reload. При нескольких адресах одного имени ACME-проверки нужно
-обслуживать на всех адресах; данный режим рассчитан на имя одного узла.
+и выполняет reload.
+
+Узлы с включёнными HTTPS/ACME и одинаковым `https_proxy_hostname` автоматически
+обнаруживаются в `access_proxies`. Каждый хранит собственные сертификат и закрытый
+ключ. nginx сначала ищет HTTP-01 токен локально; если его нет, запрашивает у соседей
+по их IP с тем же Host. Ответ соседнего узла не пересылается дальше. Поэтому
+проверка проходит через любой опубликованный адрес, включая одновременное
+продление двух независимых сертификатов. Пересылаются только GET/HEAD к
+`/.well-known/acme-challenge/`, кеширование отключено; ключи не копируются.
+Это обеспечивает доступность ответа на всех frontend-узлах, необходимую для
+[HTTP-01](https://letsencrypt.org/docs/integration-guide/#picking-a-challenge-type).
+
+Первый запуск выполняйте для обоих access вместе:
+
+```sh
+ansible-playbook -i inventory.yml playbook.yml --limit access_proxies
+```
+
+Плейбук использует `strategy: linear`: HTTP-сайты обоих узлов применяются до
+запроса любого сертификата. До первого выпуска дополнительно проверяется путь
+HTTP-01 через каждый соседний адрес. Частичный запуск допустим, когда соседние
+HTTP-сайты уже подготовлены. После первоначального выпуска продление выполняют
+локальные таймеры Certbot без Ansible. Добавляйте второй IP в DNS после проверки
+HTTPS на обоих адресах; сам деплоймент DNS не меняет.
+
+По умолчанию для связи используется `ansible_host`. Если SSH использует DNS-имя
+или отдельный управляющий адрес, задайте на узле `https_proxy_acme_address`:
+литеральный IPv4/IPv6 без порта, доступный соседям по 80/tcp. Общее имя прокси
+для этой связи не используется, чтобы DNS-балансировка не возвращала запрос
+тому же серверу. При одном участнике схема остаётся обычным локальным webroot.
+Смешивание автоматического ACME и внешних сертификатов для одного общего имени
+не поддерживается; для внешнего управления выключите ACME на всех его узлах.
 
 Для сертификата, сопровождаемого вне проекта, оставьте
 `https_proxy_acme_enabled: false` и задайте `https_proxy_certificate` (полная цепочка)
@@ -369,7 +411,7 @@ curl --proxy https://proxy.example.com:443 --proxy-user USER --noproxy '' \
 Клиентский HTTPS и ACME по умолчанию выключены. При выключении HTTPS удаляются
 только его собственные stream-фрагменты и HTTP-сайт ACME. Certbot-сертификат,
 таймер и обработчик reload сохраняются: ими могут пользоваться другие сервисы.
-Если имя больше не используется, отдельно удалите его сертификат через
+Если имя больше не используется, удалите его сертификат на каждом access через
 `certbot delete --cert-name proxy.example.com`, чтобы прекратить попытки продления.
 Невалидные TLS-фрагменты откатываются до reload общего nginx.
 
@@ -379,11 +421,16 @@ curl --proxy https://proxy.example.com:443 --proxy-user USER --noproxy '' \
 AIPROXY_TEST_NGINX=/usr/sbin/nginx \
 AIPROXY_TEST_NGINX_STREAM=/usr/lib/nginx/modules/ngx_stream_module.so \
 python3 -m unittest discover -s tests -p test_https_proxy.py -v
+
+AIPROXY_TEST_NGINX=/usr/sbin/nginx \
+python3 -m unittest discover -s tests -p test_acme_cluster.py -v
 ```
 
 Проверяются общий SNI router, HTTPS CONNECT, ALPN, передача блоков данных,
 сохранение адреса access-клиента, прежний HTTP-вход и отказ при неверном имени
 сертификата. Это локальный функциональный тест, а не замер производительности.
+Отдельный HTTP-01 тест запускает два nginx с разными webroot: проверяет оба токена
+через оба адреса, отсутствие циклов, удаление токенов и сохранение чужого HTTP-сайта.
 
 ## Использование
 

@@ -13,6 +13,8 @@
     mode: '0755'
   loop:
     - "{{ https_proxy_acme_webroot | default('/var/www/certbot') }}"
+    - "{{ https_proxy_acme_webroot | default('/var/www/certbot') }}/.well-known"
+    - "{{ https_proxy_acme_webroot | default('/var/www/certbot') }}/.well-known/acme-challenge"
     - /etc/letsencrypt/renewal-hooks/deploy
 
 - name: "Сохранить прежний HTTP-фрагмент ACME для отката"
@@ -73,6 +75,45 @@
     owner: root
     group: root
     mode: '0755'
+
+- name: "Проверить наличие сертификата до первого выпуска"
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ https_proxy_hostname }}/fullchain.pem"
+  register: _https_existing_certificate
+
+- name: "Проверить доставку HTTP-01 через соседние access до первого выпуска"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import http.client, json, pathlib, sys, uuid
+        root, hostname, peers = pathlib.Path(sys.argv[1]), sys.argv[2], json.loads(sys.argv[3])
+        path = '/.well-known/acme-challenge/aiproxy-' + uuid.uuid4().hex
+        token = uuid.uuid4().hex
+        file = root / path.lstrip('/')
+        file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            file.write_text(token)
+            file.chmod(0o644)
+            for peer in peers:
+                connection = http.client.HTTPConnection(peer['address'], 80, timeout=8)
+                try:
+                    connection.request('GET', path, headers={'Host': hostname})
+                    response = connection.getresponse()
+                    if response.status != 200 or response.read(1024).decode() != token:
+                        raise RuntimeError('HTTP-01 не проходит через соседний access; сначала подготовьте оба узла: --limit access_proxies.')
+                finally:
+                    connection.close()
+        finally:
+            file.unlink(missing_ok=True)
+      - "{{ https_proxy_acme_webroot | default('/var/www/certbot') }}"
+      - "{{ https_proxy_hostname }}"
+      - "{{ _https_proxy_acme_cluster.peers | to_json }}"
+  changed_when: false
+  when:
+    - not _https_existing_certificate.stat.exists
+    - _https_proxy_acme_cluster.peers | length > 0
 
 - name: "Выпустить или продлить сертификат HTTPS-прокси через webroot"
   ansible.builtin.command:
