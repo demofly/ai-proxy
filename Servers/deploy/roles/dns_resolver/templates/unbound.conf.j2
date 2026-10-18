@@ -13,8 +13,8 @@ server:
     # Слушаем только localhost — внешний доступ не нужен
 {% if proxy_role == 'upstream' %}
     # + адрес хоста для приёма запросов от access-нод
-    interface: 127.0.0.1
-    interface: {{ ansible_host }}
+    interface: 0.0.0.0
+    # interface: {{ ansible_host }}
 {% else %}
     interface: 127.0.0.1
 {% endif %}

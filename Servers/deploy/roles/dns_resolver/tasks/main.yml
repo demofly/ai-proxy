@@ -178,7 +178,6 @@
 - name: Apply pending unbound restart
   ansible.builtin.meta: flush_handlers
 
-# Проверка результата, а не намерения: конфигурация может быть корректной,
 # а процесс — слушать не там. Для upstream внешний адрес обязателен: именно
 # на него ходят access-ноды.
 # Расхождение процесса с конфигурацией — это дрейф состояния, поэтому оно
@@ -188,7 +187,6 @@
   block:
     - name: Verify unbound listeners
       ansible.builtin.wait_for:
-        host: "{{ item }}"
         port: "{{ dns_resolver_port | default(53) }}"
         state: started
         timeout: 15
