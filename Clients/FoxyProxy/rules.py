@@ -15,7 +15,6 @@ HERE = Path(__file__).resolve().parent
 SCHEME = r"^(?:https?|wss?)://"
 SUBDOMAINS = r"(?:[a-z0-9-]+\.)*"
 END = r"\.?(?::[0-9]{1,5})?(?:[/?#]|$)"
-TAG = "[AI Proxy:"
 SHARED_ROOTS = {
     "google.com", "googleapis.com", "amazonaws.com", "cloudfront.net",
     "cloudflare.com", "azure.com", "windows.net", "vercel.app",
@@ -46,6 +45,9 @@ def load_catalog(path: Path = HERE / "domains.json") -> dict:
     ids = [category["id"] for category in categories]
     if len(ids) != len(set(ids)) or not ids:
         raise ValueError("Category IDs must be unique")
+    titles = [category["title"] for category in categories]
+    if len(titles) != len(set(titles)):
+        raise ValueError("Category titles must be unique")
     for category in categories:
         if not re.fullmatch(r"[a-z-]+", category["id"]):
             raise ValueError("Invalid category ID")
@@ -83,9 +85,25 @@ def category_hosts(catalog: dict) -> list[tuple[dict, list[str], list[str]]]:
 
 
 def build_rules(catalog: dict) -> list[dict]:
-    return [{"type": "regex", "title": TAG + category["id"] + "] " + category["title"],
+    return [{"type": "regex", "title": category["title"],
              "pattern": host_pattern(domains, hosts), "active": True}
             for category, domains, hosts in category_hosts(catalog) if domains or hosts]
+
+
+def managed_category(rule: dict, catalog: dict) -> str | None:
+    """Recognize generated rules, including exports with the old title prefix."""
+    if rule.get("type") != "regex":
+        return None
+    title = rule.get("title", "")
+    legacy = re.match(r"^\[AI Proxy:([a-z-]+)\](?: |$)", title)
+    pattern = rule.get("pattern", "")
+    for category in catalog["categories"]:
+        if legacy and legacy[1] == category["id"]:
+            return category["id"]
+        if (title == category["title"] and pattern.startswith(SCHEME + "(?:")
+                and pattern.endswith(END)):
+            return category["id"]
+    return None
 
 
 def finite_expression(expression: str) -> list[str]:
@@ -158,22 +176,22 @@ def legacy_domains(rule: dict) -> list[str] | None:
 def merge_settings(preferences: dict, catalog: dict) -> dict:
     result = copy.deepcopy(preferences)
     generated = build_rules(catalog)
-    roots_by_title = {TAG + category["id"] + "] " + category["title"]: set(domains)
-                      for category, domains, _ in category_hosts(catalog)}
+    roots_by_id = {category["id"]: set(domains) for category, domains, _ in category_hosts(catalog)}
+    ids_by_title = {category["title"]: category["id"] for category in catalog["categories"]}
     for proxy in result["data"]:
         if proxy.get("type") in ("direct", "pac"):
             continue
-        previous = proxy.get("include", [])
+        previous = [(rule, managed_category(rule, catalog)) for rule in proxy.get("include", [])]
         # Keep a user's disabled category disabled on subsequent updates.
-        states = {rule.get("title", "").split("]", 1)[0]: rule.get("active", True)
-                  for rule in previous if rule.get("title", "").startswith(TAG)}
+        states = {category_id: rule.get("active", True)
+                  for rule, category_id in previous if category_id is not None}
         rules = copy.deepcopy(generated)
         for rule in rules:
-            rule["active"] = states.get(rule["title"].split("]", 1)[0], True)
-        roots = {d for rule in rules if rule["active"] for d in roots_by_title[rule["title"]]}
+            rule["active"] = states.get(ids_by_title[rule["title"]], True)
+        roots = {d for rule in rules if rule["active"] for d in roots_by_id[ids_by_title[rule["title"]]]}
         retained = []
-        for rule in previous:
-            if rule.get("title", "").startswith(TAG):
+        for rule, category_id in previous:
+            if category_id is not None:
                 continue
             domains = legacy_domains(rule)
             if domains is None:

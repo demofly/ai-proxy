@@ -110,6 +110,23 @@ class RulesTest(unittest.TestCase):
         updated = rules.merge_settings({"data": [item]}, self.catalog)
         self.assertFalse(updated["data"][0]["include"][0]["active"])
 
+    def test_old_titles_migrate_without_changing_patterns_or_states(self):
+        previous = copy.deepcopy(self.generated)
+        for rule, category in zip(previous, self.catalog["categories"]):
+            rule["title"] = "[AI Proxy:" + category["id"] + "] Old description"
+        previous[0]["active"] = False
+        migrated = rules.merge_settings({"data": [{"type": "http", "include": previous}]}, self.catalog)
+        actual = migrated["data"][0]["include"]
+        self.assertEqual([r["title"] for r in actual], [c["title"] for c in self.catalog["categories"]])
+        self.assertEqual([{**r, "title": old["title"]} for r, old in zip(actual, previous)], previous)
+        self.assertEqual(rules.merge_settings(migrated, self.catalog), migrated)
+
+    def test_custom_rule_with_same_short_title_is_preserved(self):
+        custom = {"type": "regex", "title": "AI", "active": True,
+                  "pattern": r"^https://personal\.example/ai/"}
+        actual = rules.merge_settings({"data": [{"type": "http", "include": [custom]}]}, self.catalog)
+        self.assertEqual(actual["data"][0]["include"], self.generated + [custom])
+
     def test_empty_category_does_not_misalign_legacy_coverage(self):
         catalog = copy.deepcopy(self.catalog)
         catalog["categories"].insert(0, {"id": "empty", "title": "Empty", "services": []})

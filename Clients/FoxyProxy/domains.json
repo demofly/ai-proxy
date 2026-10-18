@@ -4,7 +4,7 @@
   "categories": [
     {
       "id": "assistants",
-      "title": "AI: ассистенты",
+      "title": "AI",
       "services": [
         {
           "name": "ChatGPT / OpenAI",
@@ -51,7 +51,7 @@
     },
     {
       "id": "development",
-      "title": "Разработка и AI-модели",
+      "title": "Dev",
       "services": [
         {
           "name": "GitHub / Copilot / Codespaces",
@@ -101,7 +101,7 @@
     },
     {
       "id": "media",
-      "title": "AI: изображение, видео и звук",
+      "title": "Media",
       "services": [
         {
           "name": "Midjourney",
@@ -163,7 +163,7 @@
     },
     {
       "id": "design",
-      "title": "Дизайн и совместная работа",
+      "title": "Design",
       "services": [
         {
           "name": "Figma / Weave",
@@ -201,7 +201,7 @@
     },
     {
       "id": "publishing",
-      "title": "Публикация, видео и сообщества",
+      "title": "Social",
       "services": [
         {
           "name": "YouTube",
@@ -253,7 +253,7 @@
     },
     {
       "id": "dependencies",
-      "title": "Вход, проверка браузера и файлы",
+      "title": "Auth",
       "services": [
         {
           "name": "Google OAuth / fonts / user content",
