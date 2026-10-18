@@ -30,8 +30,12 @@ DEPLOY = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('resources', DEPLOY/'filter_plugins/resources.py')
 resources = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(resources)
+mtproxy_spec = importlib.util.spec_from_file_location('mtproxy_policy', DEPLOY/'filter_plugins/mtproxy.py')
+mtproxy_policy = importlib.util.module_from_spec(mtproxy_spec)
+mtproxy_spec.loader.exec_module(mtproxy_policy)
 ENV = jinja2.Environment(trim_blocks=True, keep_trailing_newline=True)
-ENV.filters.update(bool=resources.as_bool, squid_duration_seconds=resources.squid_duration_seconds)
+ENV.filters.update(bool=resources.as_bool, squid_duration_seconds=resources.squid_duration_seconds,
+                   mtproxy_nodes=mtproxy_policy.mtproxy_nodes)
 
 
 def render(template, values):
@@ -114,8 +118,8 @@ def main():
                             'up':{'ansible_host':'127.0.0.1', 'squid_port':443, 'mtproxy_enabled':True}},
                   squid_local_port=3128, squid_mgmt_port=3129, enable_auth=False,
                   mtproxy_local_port=2083, squid_tls_term_port=4444,
-                  mtproxy_tls_port=4443, mtproxy_relay_port=9443, mtproxy_hostname='',
-                  mtproxy_fake_tls_domain='example.com', proxy_max_connections=96,
+                  mtproxy_tls_port=4443, mtproxy_relay_port=9443, mtproxy_hostname='public-proxy.example',
+                  mtproxy_fake_tls_domain='max.ru', mtproxy_enabled=True, proxy_max_connections=96,
                   proxy_effective_max_connections=transit_capacity)
     # End-user and access-node identities intentionally do not reach upstream Squid.
     upstream = render('templates/squid-upstream.conf.j2', common)
@@ -157,7 +161,8 @@ def main():
 
     router = render('templates/00-sni-router.conf.j2', common)
     router = router.replace('include /etc/nginx/stream.d/sni-map.d/*.conf;',
-                            'transit.internal squid_tls_term; example.com mtproxy_tls_term;')
+        render('roles/mtproxy/templates/sni-map.d/squid.conf.j2',common)
+        +render('roles/mtproxy/templates/sni-map.d/mtproxy.conf.j2',common))
     router = router.replace('include /etc/nginx/stream.d/router.d/*.conf;', '')
     router = router.replace('/var/log/nginx/sni-router.log', str(work/'sni.log'))
     term = render('roles/mtproxy/templates/nginx-squid-tls-term.conf.j2', common)
@@ -231,7 +236,7 @@ def main():
         ctx = ssl._create_unverified_context()
         # Matrix can expose 443 publicly. An untrusted peer must be rejected at
         # our terminators even when the outer router/firewall accepts its TCP.
-        for sni in ('transit.internal', 'example.com'):
+        for sni in ('transit.internal', 'max.ru', 'public-proxy.example'):
             raw = socket.socket()
             raw.settimeout(5)
             raw.bind(('127.0.0.2', 0))
@@ -285,7 +290,7 @@ def main():
             assert relay_sock.recv(100) == b'after-mobile-sleep'
         print('Telegram TLS relays: survived idle seconds', opts.idle_seconds, flush=True)
         # Validate the real mtg config and its connection admission independently.
-        secret = 'ee'+'11'*16+'6578616d706c652e636f6d'
+        secret = 'ee'+'11'*16+'6d61782e7275'
         mtvalues = dict(common, mtproxy_secret_resolved=secret, mtproxy_max_connections=100,
                         mtproxy_effective_max_connections=concurrency, mtproxy_local_port=2084)
         (work/'mtg.toml').write_text(render('roles/mtproxy/templates/mtg.toml.j2', mtvalues))

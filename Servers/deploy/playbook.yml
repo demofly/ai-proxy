@@ -58,6 +58,19 @@
     # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
+    - name: Resolve the default MTProxy fake-TLS domain without masking inventory
+      ansible.builtin.set_fact:
+        mtproxy_fake_tls_domain: '{{ mtproxy_fake_tls_domain | default("max.ru") }}'
+      tags: [always]
+
+    - name: Resolve the load-balanced MTProxy credential before changing hosts
+      ansible.builtin.include_tasks:
+        file: tasks/mtproxy-cluster.yml
+        apply:
+          tags: [always]
+      run_once: true
+      tags: [always]
+
     - name: Refresh hardware facts before resource planning
       tags: [always]
       ansible.builtin.setup:

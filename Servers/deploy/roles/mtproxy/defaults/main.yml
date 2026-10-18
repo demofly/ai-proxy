@@ -2,6 +2,7 @@
 # [AITS] 2026-08-29T11:04:55Z
 # Включение/отключение MTProxy
 mtproxy_enabled: false
+mtproxy_fake_tls_domain: max.ru
 
 # Сопровождение версий пакетов из репозиториев ОС (nginx, libnginx-mod-stream).
 #   true  — прогон доводит пакеты роли до последней доступной версии;

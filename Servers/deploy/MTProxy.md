@@ -1,95 +1,65 @@
-# MTProxy Configuration Reference — tgproxy.example.com
+# MTProxy: единый секрет и fake-TLS SNI max.ru
 
-## Server Information
+Готовый фрагмент для `all.vars` рабочего `inventory.yml`:
 
-| Параметр | Значение |
-|---|---|
-| **Публичный домен** | tgproxy.example.com |
-| **Fake-TLS домен** | git.example.com |
-| **Порт подключения** | 443 (HTTPS) |
-| **Тип маршрутизации** | nginx stream SNI-based (ssl_preread) |
-| **Transit encryption** | TLS 1.3 (access→upstream, self-signed cert) |
-| **Версия mtg** | 2.1.8 |
-
-## Access Node IPs (Load Balancing)
-
-| Хост | IP адрес | Статус |
-|---|---|---|
-| access01.example.com | 203.0.113.1 | Primary |
-| access02.example.com | 203.0.113.2 | Secondary (failover) |
-
-## MTProxy Secret
-
-```
-bb22cc33dd44ee55ff66001122334455066769742e6578616d706c652e636f6d
+```yaml
+mtproxy_enabled: true
+mtproxy_fake_tls_domain: "max.ru"
+mtproxy_hostname: ""
+mtproxy_secret: ""
 ```
 
-> ⚠️ **ВАЖНО:** Храните секрет в безопасности. Не публикуйте в открытом виде.
+`max.ru` — имя маскировки, а не адрес вашего прокси. В Telegram укажите IP или
+собственный DNS-адрес access-узла, порт 443 и общий секрет из его upstream.
 
-## Client Configuration
+Пустой `mtproxy_secret` означает разовый fallback:
 
-### Option 1: Через доменное имя (рекомендуется)
+1. Общий существующий секрет из `/etc/mtproxy/mtg.toml` сохраняется; при отсутствии
+   TOML читается legacy `mtg.env`.
+2. Новые upstream получают то же значение. Балансировщик использует только узлы
+   с включённым MTProxy.
+3. Только если секрета нет ни на одном узле, создаётся один общий fake-TLS secret.
+   Энтропия сохраняется на управляющей машине в `Servers/deploy/secrets/` с
+   закрытыми правами; каталог исключён из Git. Повторный прогон секрет не меняет.
+4. Если существующие значения различаются, deployment останавливается до изменения
+   служб. Оператор выбирает общий секрет; автоматической ротации нет.
 
-**Telegram MTProxy Link:**
-```
-tg://proxy?server=tgproxy.example.com&port=443&secret=bb22cc33dd44ee55ff66001122334455066769742e6578616d706c652e636f6d
-```
+Домен входит в секрет после `ee` и 16 байт ключа. Для `max.ru` суффикс равен
+`6d61782e7275`. Если старый секрет кодирует другой домен, сменить только SNI нельзя.
+Для явной ротации создайте новый общий секрет локально:
 
-1. Откройте ссылку в Telegram
-2. Нажмите "Использовать прокси"
-3. Готово!
-
-### Option 2: Через IP адрес (fallback)
-
-Если доменное имя не резолвится, используйте один из IP адресов:
-
-**Access-01:**
-```
-tg://proxy?server=203.0.113.1&port=443&secret=bb22cc33dd44ee55ff66001122334455066769742e6578616d706c652e636f6d
-```
-
-**Access-02 (failover):**
-```
-tg://proxy?server=203.0.113.2&port=443&secret=bb22cc33dd44ee55ff66001122334455066769742e6578616d706c652e636f6d
+```bash
+python3 -c "import secrets; print('ee' + secrets.token_hex(16) + '6d61782e7275')"
 ```
 
-## Troubleshooting
+Вставьте результат в `mtproxy_secret` рабочего inventory, примените deployment
+и обновите ссылки пользователей. Секрет должен совпадать на всех включённых
+upstream; несовпадение или частичная ротация отвергаются preflight.
 
-| Проблема | Решение |
-|---|---|
-| "Не удаётся подключиться" | Проверьте: 1) интернет соединение, 2) доменное имя резолвится (nslookup tgproxy.example.com), 3) секрет скопирован корректно |
-| "Прокси недоступен" | Попробуйте второй access node (203.0.113.2) или альтернативный IP |
-| "Медленное соединение" | Может быть нагрузка на upstream node. Попробуйте переподключиться (система автоматически переключит на другой upstream) |
-| "Секрет неверный" | Убедитесь, что скопировали весь секрет целиком без пробелов |
+Формат ссылки (замените адрес и секрет действующими значениями):
 
-## Advanced Options
+```text
+tg://proxy?server=YOUR_ACCESS_HOST&port=443&secret=YOUR_SHARED_SECRET
+```
 
-### Manual Telegram Proxy Menu
+`mtproxy_hostname`, если задан, используется для адреса в выдаваемой ссылке и как
+дополнительное имя маршрутизации. Межузловое реле всегда использует общий
+`mtproxy_fake_tls_domain`; дополнительные имена не меняют домен внутри секрета.
 
-Если ссылка не открывается:
+На upstream оба приватных TLS-терминатора проверяют адрес access-узла по входному
+PROXY-заголовку. Исходный адрес клиента на upstream не восстанавливается.
 
-1. Откройте Telegram → **Settings** → **Privacy and Security**
-2. Выберите **Connection Type** → **Use Custom Proxy**
-3. Выберите **MTProxy**
-4. Заполните:
-   - **Server**: `tgproxy.example.com` (или IP)
-   - **Port**: `443`
-   - **Secret**: `bb22cc33dd44ee55ff66001122334455066769742e6578616d706c652e636f6d`
-5. Сохраните
+Проверка состояния:
 
-## Security
+```bash
+ssh root@<upstream-host> 'systemctl status mtg nginx'
+ssh root@<upstream-host> 'journalctl -u mtg -n 50'
+ssh root@<access-host> 'nginx -t'
+```
 
-- ✅ **DPI-resistant**: Трафик маскируется под TLS к git.example.com
-- ✅ **Encrypted**: Весь трафик зашифрован (MTProxy protocol + TLS 1.3 access→upstream transit)
-- ✅ **No logging**: Логирование отключено для приватности
-- ✅ **Firewall**: Доступ к MTProxy на upstream только от access-нод (UFW/nftables)
-- ✅ **PROXY protocol**: Реальный IP клиента пробрасывается через всю цепочку
-- ✅ **CrowdSec IPS**: Автоматическая блокировка abuse-трафика, whitelist инфраструктуры
+Локальные проверки без рабочих серверов:
 
-## Support
-
-Для вопросов/проблем:
-- Проверьте логи на upstream node: `journalctl -u mtg -f`
-- Проверьте SNI маршрутизацию на access node: `cat /etc/nginx/stream.d/sni-map.d/aiproxy.conf`
-- Проверьте SNI маршрутизацию на upstream node: `cat /etc/nginx/stream.d/sni-map.d/mtproxy.conf`
-- Проверьте nginx stream конфиг: `nginx -T 2>&1 | grep -A5 'stream'`
+```bash
+python3 Servers/deploy/tests/check_mtproxy_cluster.py
+python3 -m unittest discover -s Servers/deploy/tests -p 'test_mtproxy_cluster.py'
+```

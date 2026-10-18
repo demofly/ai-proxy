@@ -1,0 +1,75 @@
+---
+- name: Identify enabled MTProxy backends
+  ansible.builtin.set_fact:
+    _mtproxy_cluster_nodes: '{{ groups["upstreams"] | default([]) | mtproxy_nodes(hostvars) }}'
+
+- name: Require a backend for access nodes that enable MTProxy
+  ansible.builtin.assert:
+    that: >-
+      _mtproxy_cluster_nodes | length > 0 or
+      (groups['access_proxies'] | default([]) | mtproxy_nodes(hostvars) | length == 0)
+    fail_msg: MTProxy is enabled on access nodes but no enabled upstream backend exists.
+
+- name: Resolve one credential for the load-balanced MTProxy service
+  when: _mtproxy_cluster_nodes | length > 0
+  block:
+    - name: Validate the explicit cluster settings before reading legacy files
+      ansible.builtin.set_fact:
+        _mtproxy_requested_plan: '{{ _mtproxy_cluster_nodes | mtproxy_cluster_plan(hostvars, []) }}'
+      no_log: true
+
+    - name: Require consistent MTProxy settings across enabled backends
+      ansible.builtin.assert:
+        that: _mtproxy_requested_plan.error | length == 0
+        fail_msg: '{{ _mtproxy_requested_plan.error }}'
+
+    - name: Inspect existing MTProxy credential files
+      ansible.builtin.stat:
+        path: '/etc/mtproxy/{{ item.1 }}'
+      delegate_to: '{{ item.0 }}'
+      loop: '{{ _mtproxy_cluster_nodes | product(["mtg.toml", "mtg.env"]) | list }}'
+      register: _mtproxy_cluster_files
+      when: _mtproxy_requested_plan.secret | length == 0
+      no_log: true
+
+    - name: Read existing MTProxy credential files
+      ansible.builtin.slurp:
+        src: '{{ item.stat.path }}'
+      delegate_to: '{{ item.item.0 }}'
+      loop: '{{ _mtproxy_cluster_files.results }}'
+      when:
+        - _mtproxy_requested_plan.secret | length == 0
+        - item.stat.exists | default(false)
+      register: _mtproxy_cluster_reads
+      no_log: true
+
+    - name: Determine whether MTProxy credentials can be preserved safely
+      ansible.builtin.set_fact:
+        _mtproxy_cluster_plan: '{{ _mtproxy_cluster_nodes | mtproxy_cluster_plan(hostvars, _mtproxy_cluster_reads.results) }}'
+      no_log: true
+
+    - name: Reject ambiguous MTProxy credentials before changing services
+      ansible.builtin.assert:
+        that: _mtproxy_cluster_plan.error | length == 0
+        fail_msg: '{{ _mtproxy_cluster_plan.error }}'
+
+    - name: Create the private controller directory for initial cluster credentials
+      ansible.builtin.file:
+        path: '{{ playbook_dir }}/secrets'
+        state: directory
+        mode: '0700'
+      delegate_to: localhost
+      become: false
+      when: _mtproxy_cluster_plan.secret | length == 0
+
+    - name: Publish the common MTProxy secret to all hosts in this run
+      ansible.builtin.set_fact:
+        _mtproxy_cluster_secret: >-
+          {{ _mtproxy_cluster_plan.secret if _mtproxy_cluster_plan.secret | length > 0 else
+             'ee' + (lookup('ansible.builtin.password', playbook_dir + '/secrets/mtproxy-entropy',
+                            length=32, chars=['hexdigits']) | lower)
+             + (_mtproxy_cluster_plan.domain | mtproxy_domain_hex) }}
+      delegate_to: localhost
+      delegate_facts: true
+      become: false
+      no_log: true

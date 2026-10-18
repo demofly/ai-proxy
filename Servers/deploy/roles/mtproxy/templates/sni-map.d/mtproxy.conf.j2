@@ -2,4 +2,7 @@
 # MTProxy: SNI routing entries (upstream nodes)
 # Access relay connects with proxy_ssl_name set to this hostname
 
-{{ mtproxy_hostname | default(mtproxy_fake_tls_domain, true) }}  mtproxy_tls_term;
+{{ mtproxy_fake_tls_domain }}  mtproxy_tls_term;
+{% if mtproxy_hostname | default('') and mtproxy_hostname != mtproxy_fake_tls_domain %}
+{{ mtproxy_hostname }}  mtproxy_tls_term;
+{% endif %}

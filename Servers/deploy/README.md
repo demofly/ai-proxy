@@ -281,7 +281,9 @@ access без доверенного материала при прогоне, �
    - Укажите реальные IP/hostname серверов в группах `access_proxies` и `upstreams`
    - Настройте переменные `allowed_domains` и `allowed_domain_patterns`
    - Задайте `keepalived_auth_pass`; `mtproxy_secret` можно оставить пустым — он
-     сгенерируется на узле при первом развёртывании
+     сгенерируется один раз для кластера, только если секрета нет ни на одном upstream.
+     Существующий общий секрет сохраняется; разные существующие значения требуют
+     явного выбора общего `mtproxy_secret`, автоматической ротации нет.
 
 2. Запустите playbook:
    ```bash
@@ -389,7 +391,7 @@ htpasswd -B -C 12 -bn пользователь пароль >> passwd
 | `crowdsec_memory_mb` | Устаревшее имя явного предела CrowdSec, МиБ; предпочтительно `proxy_memory_limits.crowdsec` | автоматически, минимум 192 |
 | `crowdsec_fw_bouncer_memory_mb` | Устаревшее имя явного предела bouncer, МиБ; предпочтительно `proxy_memory_limits.crowdsec_bouncer` | автоматически, минимум 24 |
 | `mtproxy_enabled` | Включить MTProxy | true |
-| `mtproxy_fake_tls_domain` | Домен маскировки MTProxy; он же ключ карты имён на access-узлах. Умолчания нет: при пустом значении запись карты не выпускается | `example.com` в образце инвентори |
+| `mtproxy_fake_tls_domain` | Домен fake-TLS, закодированный в секрете; также SNI межузлового MTProxy-реле. На всех upstream одинаков | `max.ru` |
 | `mtproxy_hostname` | Публичный домен для MTProxy (маршрутизация SNI) | tgproxy.example.com |
 | `mtproxy_local_port` | Порт mtg daemon (upstream) | 2083 |
 | `mtproxy_secret` | Hex-секрет | "" (автоген) |

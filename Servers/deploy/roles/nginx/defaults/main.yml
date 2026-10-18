@@ -1,4 +1,5 @@
 ---
+mtproxy_fake_tls_domain: max.ru
 # [AITS] 2026-08-29T11:04:55Z
 # Умолчания роли nginx (ai-assistants-proxy).
 

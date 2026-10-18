@@ -547,6 +547,7 @@
     - mtproxy_secret == ""
     - not mtg_toml_file.stat.exists
     - not mtg_env_file.stat.exists
+    - hostvars['localhost']._mtproxy_cluster_secret is not defined
   changed_when: false
   no_log: true
 
@@ -575,7 +576,9 @@
   no_log: true
   ansible.builtin.set_fact:
     mtproxy_secret_resolved: >-
-      {%- if mtproxy_secret != "" -%}
+      {%- if hostvars['localhost']._mtproxy_cluster_secret is defined -%}
+        {{ hostvars['localhost']._mtproxy_cluster_secret }}
+      {%- elif mtproxy_secret != "" -%}
         {{ mtproxy_secret }}
       {%- elif mtg_toml_file.stat.exists -%}
         {{ mtg_existing_secret_toml.stdout }}

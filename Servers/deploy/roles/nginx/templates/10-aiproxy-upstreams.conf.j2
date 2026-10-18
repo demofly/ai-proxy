@@ -1,9 +1,12 @@
 # {{ ansible_managed }}
 # ai-assistants-proxy: upstream definitions (stream context)
 
+{% set mtproxy_backends = groups.get('upstreams', []) | mtproxy_nodes(hostvars) %}
+{% if mtproxy_enabled | default(false) | bool and mtproxy_backends | length > 0 %}
+
 # Real upstream backends (nginx SNI router on port 443)
 upstream aiproxy_mtproxy_backends {
-{% for host in groups['upstreams'] %}
+{% for host in mtproxy_backends %}
     server {{ hostvars[host]['ansible_host'] }}:443; # {{ host }}
 {% endfor %}
 }
@@ -25,7 +28,7 @@ server {
     proxy_ssl on;
     proxy_ssl_protocols TLSv1.3;
     proxy_ssl_server_name on;
-    proxy_ssl_name {{ mtproxy_hostname | default(mtproxy_fake_tls_domain, true) }};
+    proxy_ssl_name {{ mtproxy_fake_tls_domain }};
     proxy_ssl_verify off;  # self-signed certs on upstream nodes
 
     # Exceed mtg's 300s idle timeout; 60s races mobile Telegram keepalives.
@@ -36,3 +39,4 @@ server {
     # TCP keepalive: detect dead peers via kernel probes
     proxy_socket_keepalive on;
 }
+{% endif %}
