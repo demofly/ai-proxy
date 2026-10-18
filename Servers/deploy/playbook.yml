@@ -1147,6 +1147,33 @@
             name: nftables
             state: present
 
+        - name: Check whether the shared nftables table already exists
+          ansible.builtin.command: nft -j list table inet filter
+          register: _proxy_existing_nft_table
+          changed_when: false
+          failed_when: false
+          check_mode: false
+
+        - name: Read the previous owner nftables configuration
+          ansible.builtin.slurp:
+            src: /etc/nftables.conf
+          register: _proxy_existing_nft_config
+          failed_when: false
+
+        - name: Refuse to take over an unowned nftables table
+          ansible.builtin.assert:
+            that:
+              - >-
+                _proxy_existing_nft_table.rc != 0 or
+                ('# nftables Configuration - Upstream Proxy' in
+                 (_proxy_existing_nft_config.content | default('') | b64decode)
+                 and '# Managed by Ansible' in
+                 (_proxy_existing_nft_config.content | default('') | b64decode)) or
+                (_proxy_existing_nft_table.stdout | nft_empty_default_table)
+            fail_msg: >-
+              Existing inet filter is not managed by ai-proxy. Refusing to replace
+              its reserved input/forward/output chains; integrate the host firewall first.
+
         - name: Deploy nftables config
           ansible.builtin.template:
             src: templates/nftables-upstream.conf.j2
@@ -1200,14 +1227,17 @@
 
         # Весь набор правил цепочки — одним файлом; он же источник для
         # восстановления при загрузке. validate проверяет разбор до применения.
-        - name: Deploy ruleset for the custom chain
+        - name: Deploy IPv4 and IPv6 rulesets for the custom chain
           ansible.builtin.template:
-            src: templates/iptables-upstream.rules.j2
-            dest: "{{ iptables_rules_path }}"
+            src: '{{ item.template }}'
+            dest: '{{ item.path }}'
             owner: root
             group: root
             mode: '0644'
-            validate: 'iptables-restore --test %s'
+            validate: '{{ item.restore }} --test %s'
+          loop:
+            - {template: templates/iptables-upstream.rules.j2, path: '{{ iptables_rules_path }}', restore: iptables-restore}
+            - {template: templates/ip6tables-upstream.rules.j2, path: /etc/iptables/aiproxy-upstream-v6.rules, restore: ip6tables-restore}
 
         # `--noflush` заменяет ТОЛЬКО объявленную в файле цепочку и делает это одной
         # транзакцией: окна с пустой цепочкой (в котором порт 53 открыт) не возникает,
@@ -1216,26 +1246,32 @@
         # по результату, но не по факту запуска.
         - name: Apply custom chain atomically (foreign chains untouched)
           ansible.builtin.shell: |
-            before=$(iptables -S {{ squid_chain }} 2>/dev/null || true)
-            iptables-restore --noflush {{ iptables_rules_path }}
-            after=$(iptables -S {{ squid_chain }} 2>/dev/null || true)
+            set -e
+            before=$({{ item.command }} -S {{ squid_chain }} 2>/dev/null || true)
+            {{ item.command }}-restore --wait 10 --noflush {{ item.path }}
+            after=$({{ item.command }} -S {{ squid_chain }})
             [ "$before" = "$after" ] || echo CHANGED
           args:
             executable: /bin/bash
           register: iptables_chain_applied
           changed_when: "'CHANGED' in iptables_chain_applied.stdout"
+          loop:
+            - {command: iptables, path: '{{ iptables_rules_path }}'}
+            - {command: ip6tables, path: /etc/iptables/aiproxy-upstream-v6.rules}
 
         - name: Check if jump to custom chain exists in INPUT
           ansible.builtin.shell: |
-            iptables -C INPUT -j {{ squid_chain }} 2>/dev/null && echo 'exists' || echo 'missing'
+            {{ item }} -C INPUT -j {{ squid_chain }} 2>/dev/null && echo 'exists' || echo 'missing'
           register: chain_jump_check
           changed_when: false
           failed_when: false
+          loop: [iptables, ip6tables]
 
         - name: Add jump to custom chain at the beginning of INPUT
           ansible.builtin.shell: |
-            iptables -I INPUT 1 -j {{ squid_chain }}
-          when: chain_jump_check.stdout == 'missing'
+            {{ item.item }} --wait 10 -I INPUT 1 -j {{ squid_chain }}
+          when: item.stdout == 'missing'
+          loop: '{{ chain_jump_check.results }}'
 
         # Восстановление при загрузке — только своей цепочки и своего перехода из
         # INPUT. Полное восстановление ruleset (iptables-persistent) здесь запрещено
@@ -1249,14 +1285,17 @@
             content: |
               [Unit]
               Description=AI Proxy upstream firewall ({{ squid_chain }} chain)
+              DefaultDependencies=no
+              After=local-fs.target
               Documentation=file://{{ iptables_rules_path }}
               Wants=network-pre.target
-              Before=network-pre.target
+              Before=network-pre.target nginx.service squid.service unbound.service mtg.service
 
               [Service]
               Type=oneshot
               RemainAfterExit=yes
-              ExecStart=/bin/sh -c 'iptables-restore --noflush {{ iptables_rules_path }} && (iptables -C INPUT -j {{ squid_chain }} 2>/dev/null || iptables -I INPUT 1 -j {{ squid_chain }})'
+              ExecStart=/bin/sh -ec 'iptables-restore --wait 10 --noflush {{ iptables_rules_path }}; iptables -C INPUT -j {{ squid_chain }} 2>/dev/null || iptables --wait 10 -I INPUT 1 -j {{ squid_chain }}'
+              ExecStart=/bin/sh -ec 'ip6tables-restore --wait 10 --noflush /etc/iptables/aiproxy-upstream-v6.rules; ip6tables -C INPUT -j {{ squid_chain }} 2>/dev/null || ip6tables --wait 10 -I INPUT 1 -j {{ squid_chain }}'
 
               [Install]
               WantedBy=multi-user.target

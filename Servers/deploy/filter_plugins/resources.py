@@ -1,5 +1,6 @@
 """Resource planning shared by Ansible and offline regression tests (MiB)."""
 import math
+import json
 import re
 
 MIB = 1048576
@@ -9,6 +10,18 @@ PROXY_MEMORY_FLOORS = {'squid': 64, 'unbound': 24, 'nginx': 48, 'mtg': 32,
 # Growth above the tested service floors; the floors are never scaled down.
 PROXY_MEMORY_WEIGHTS = {'squid': 32, 'nginx': 24, 'mtg': 8,
                         'crowdsec': 12, 'crowdsec_bouncer': 4}
+
+
+def nft_empty_default_table(snapshot):
+    """Only an empty, accepting distro skeleton is safe to claim automatically."""
+    for entry in json.loads(snapshot).get('nftables', []):
+        if 'metainfo' in entry or 'table' in entry:
+            continue
+        chain = entry.get('chain', {})
+        if (chain.get('name') not in ('input', 'forward', 'output')
+                or chain.get('hook') != chain['name'] or chain.get('policy') != 'accept'):
+            return False
+    return True
 
 
 def proxy_memory_budget(ram_mb, limit_mb=None, minimum_mb=0):
@@ -174,7 +187,8 @@ def postgres_resource_plan(memory, users, pool_max=None, pool_min=2):
 
 class FilterModule:
     def filters(self):
-        return {"squid_duration_seconds": squid_duration_seconds,
+        return {"nft_empty_default_table": nft_empty_default_table,
+                "squid_duration_seconds": squid_duration_seconds,
                 "proxy_memory_budget": proxy_memory_budget,
                 "proxy_memory_plan": proxy_memory_plan,
                 "service_memory": service_memory, "postgres_cluster": postgres_cluster,

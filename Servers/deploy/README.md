@@ -82,10 +82,21 @@ deploy/
 | Условие на хосте | Бэкенд | Версия | Конфигурация |
 |---|---|---|---|
 | ufw активен (`ufw status` = active) | UFW | >= 0.36 | правила через `community.general.ufw` |
-| ufw неактивен + Debian | nftables | >= 1.0 | `/etc/nftables.conf` из шаблона; применяется reload, заменяется только таблица `inet filter` |
-| ufw неактивен + не Debian (Ubuntu, RHEL) | iptables | >= 1.8 | `/etc/iptables/aiproxy-upstream.rules` → `iptables-restore --noflush`; цепочка `SQUID-PROXY`, jump из INPUT, восстановление юнитом `aiproxy-firewall.service` |
+| ufw неактивен + Debian | nftables | >= 1.0 | `/etc/nftables.conf`; атомарно обновляются зарезервированные цепочки и set внутри `inet filter` |
+| ufw неактивен + не Debian (Ubuntu, RHEL) | iptables / ip6tables | >= 1.8 | `/etc/iptables/aiproxy-upstream.rules` и `aiproxy-upstream-v6.rules`; отдельная `SQUID-PROXY` в каждой семье, восстановление `aiproxy-firewall.service` |
 
-**Co-deployment.** Обе шаблонные ветки трогают только собственные объекты: nftables заменяет свою таблицу, iptables — свою цепочку, и обе делают это одной транзакцией. Таблицы и цепочки соседних проектов (Matrix, bouncer CrowdSec) сохраняются, а окна с открытым портом при обновлении правил не возникает. Пакеты полного восстановления ruleset (`iptables-persistent`, `iptables-services`) намеренно не используются: они вернули бы при загрузке снимок **чужих** правил на момент нашего развёртывания. Обратная сторона: восстановление своих правил при загрузке — забота каждого проекта; `aiproxy-firewall.service` воспроизводит только цепочку `SQUID-PROXY` и переход в неё из INPUT.
+**Co-deployment.** nftables сохраняет таблицу `inet filter` и чужие объекты внутри неё.
+Проект управляет цепочками `input`, `forward`, `output`, `matrix_services` и set
+`dns_clients`; внешние изменения этих зарезервированных объектов не поддерживаются.
+Непустую чужую таблицу без признака прежнего владельца deployment не захватывает.
+iptables и ip6tables заменяют только собственные цепочки, не сбрасывая INPUT и
+правила соседей. Применение каждой семьи атомарно; ошибка restore останавливает
+deployment. Boot-unit восстанавливает обе семьи до старта сети и прокси.
+
+При публичном 443 для Matrix сетевой экран не отделяет его клиентов от ai-proxy.
+Поэтому оба приватных TLS-терминатора также проверяют входной `$proxy_protocol_addr`
+по IP access-узлов. Проверка не восстанавливает `$remote_addr`: в Squid по-прежнему
+поступает обезличенный PROXY-заголовок. Разрешения Matrix и анонимизация сохранены.
 
 Ubuntu после чистой установки попадает в третью строку: ufw установлен, но не
 активирован. Все три бэкенда закрывают один и тот же набор портов upstream-ноды

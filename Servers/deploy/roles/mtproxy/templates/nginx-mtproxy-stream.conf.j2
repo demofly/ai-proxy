@@ -6,6 +6,13 @@
 # Устройство: маршрутизатор SNI на порту 443 направляет сюда трафик MTProxy.
 # TLS is terminated here; decrypted stream forwarded to mtg daemon.
 
+map $proxy_protocol_addr $aiproxy_mtg_target {
+    default "";
+{% for host in groups['access_proxies'] %}
+    {{ hostvars[host]['ansible_host'] }} 127.0.0.1:{{ mtproxy_local_port }};
+{% endfor %}
+}
+
 upstream mtproxy_tls_term {
     server 127.0.0.1:{{ mtproxy_tls_port | default(4443) }};
 }
@@ -17,7 +24,7 @@ server {
     ssl_certificate_key /etc/nginx/ssl/mtproxy.key;
     ssl_protocols       TLSv1.3;
 
-    proxy_pass 127.0.0.1:{{ mtproxy_local_port }};
+    proxy_pass $aiproxy_mtg_target;
     limit_conn aiproxy_transit {{ proxy_effective_max_connections | default(proxy_max_connections | default(96)) | int }};
 
     # Exceed mtg's 300s idle timeout; 60s races mobile Telegram keepalives.

@@ -110,7 +110,7 @@ def main():
                   enable_caching=False, enable_logging=False, nginx_on_443=True, squid_transit_tls=True,
                   mem_squid_mb=limits['squid'], squid_tls_sni='transit.internal', allowed_domains=[], allowed_domain_patterns=[],
                   groups={'access_proxies':['access'], 'upstreams':['up']},
-                  hostvars={'access': {'ansible_host':'192.0.2.1'},
+                  hostvars={'access': {'ansible_host':'127.0.0.1'},
                             'up':{'ansible_host':'127.0.0.1', 'squid_port':443, 'mtproxy_enabled':True}},
                   squid_local_port=3128, squid_mgmt_port=3129, enable_auth=False,
                   mtproxy_local_port=2083, squid_tls_term_port=4444,
@@ -229,6 +229,21 @@ def main():
         wait_port(3228)
         wait_port(9443)
         ctx = ssl._create_unverified_context()
+        # Matrix can expose 443 publicly. An untrusted peer must be rejected at
+        # our terminators even when the outer router/firewall accepts its TCP.
+        for sni in ('transit.internal', 'example.com'):
+            raw = socket.socket()
+            raw.settimeout(5)
+            raw.bind(('127.0.0.2', 0))
+            raw.connect(('127.0.0.1', 443))
+            with ctx.wrap_socket(raw, server_hostname=sni) as denied:
+                denied.sendall(b'CONNECT 127.0.0.1:18443 HTTP/1.1\r\nHost: origin.test\r\n\r\n')
+                try:
+                    reply = denied.recv(1024)
+                except (ConnectionResetError, ssl.SSLError):
+                    reply = b''
+                assert not reply, (sni, reply)
+        print('Private TLS terminators reject untrusted sources on shared public 443', flush=True)
         def tunnel():
             sock = socket.create_connection(('127.0.0.1', 3228), timeout=10)
             sock.sendall(b'PROXY TCP4 198.51.100.10 127.0.0.1 50000 3228\r\n'

@@ -42,6 +42,9 @@
 # Order matters: the chain is walked top-down, first match decides, and the
 # INPUT policy is ACCEPT — without these rules the ports stay open to everyone.
 -A {{ squid_chain }} -p tcp --dport {{ squid_port }} -j DROP
+{% if mtproxy_enabled | default(false) | bool and squid_port | int != 443 %}
+-A {{ squid_chain }} -p tcp --dport 443 -j DROP
+{% endif %}
 -A {{ squid_chain }} -p tcp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
 -A {{ squid_chain }} -p udp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
 

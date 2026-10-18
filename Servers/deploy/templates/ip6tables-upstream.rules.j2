@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+# IPv6 counterpart of the private upstream chain. IPv4 access addresses do not
+# authorize IPv6 sources. Leave SSH, ICMPv6 and foreign services to host policy.
+*filter
+:{{ squid_chain }} - [0:0]
+-A {{ squid_chain }} -i lo -j RETURN
+{% for host in groups['access_proxies'] %}
+{% if ':' in hostvars[host]['ansible_host'] %}
+-A {{ squid_chain }} -s {{ hostvars[host]['ansible_host'] }} -p tcp --dport {{ squid_port }} -j ACCEPT
+{% if mtproxy_enabled | default(false) | bool and squid_port | int != 443 %}
+-A {{ squid_chain }} -s {{ hostvars[host]['ansible_host'] }} -p tcp --dport 443 -j ACCEPT
+{% endif %}
+{% endif %}
+{% endfor %}
+{% for port in ([squid_port | int, 53] + ([443] if mtproxy_enabled | default(false) | bool else [])) | unique %}
+-A {{ squid_chain }} -p tcp --dport {{ port }} -j DROP
+{% endfor %}
+-A {{ squid_chain }} -p udp --dport 53 -j DROP
+-A {{ squid_chain }} -j RETURN
+COMMIT

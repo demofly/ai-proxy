@@ -11,6 +11,14 @@
 #   → TLS terminator (proxy_protocol on) → Squid (require-proxy-header)
 #   The terminator deliberately re-originates the header from loopback.
 #   Squid trusts this local listener; the firewall authenticates access-node IPs.
+#   Also authorize the incoming peer here: co-deployed Matrix may open 443.
+
+map $proxy_protocol_addr $aiproxy_squid_target {
+    default "";
+{% for host in groups['access_proxies'] %}
+    {{ hostvars[host]['ansible_host'] }} 127.0.0.1:{{ squid_local_port | default(3128) }};
+{% endfor %}
+}
 
 # Цель маршрутизатора: сюда он направляет соединения с именем участка в SNI.
 # Порт слушает терминатор ниже; расшифрованный поток он передаёт Squid.
@@ -29,7 +37,9 @@ server {
     ssl_certificate_key /etc/nginx/ssl/squid-transit.key;
     ssl_protocols       TLSv1.3;
 
-    proxy_pass 127.0.0.1:{{ squid_local_port | default(3128) }};
+    # Empty target closes unauthorized sessions before they can reach Squid.
+    # Do not restore $remote_addr: the outbound PROXY header stays anonymous.
+    proxy_pass $aiproxy_squid_target;
 
     # Re-inject PROXY protocol for upstream Squid (require-proxy-header)
     # Intentionally anonymized: do not set_real_ip_from / restore client IP.

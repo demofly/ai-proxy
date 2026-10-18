@@ -3,13 +3,19 @@
 # Managed by Ansible - DO NOT EDIT MANUALLY
 # Host: {{ inventory_hostname }} ({{ ansible_host }})
 #
-# Atomic replacement of OUR table only (no `flush ruleset`): upstream nodes also
-# carry the CrowdSec firewall bouncer (table ip crowdsec / table ip6 crowdsec6)
-# and tables of co-deployed projects. Flushing the whole ruleset would drop their
-# bans until the next bouncer resync.
-# `add table` creates the table when absent, so `delete` is always safe.
+# Atomically replace reserved owner chains/set, preserving all other objects.
+# Never delete the shared table: foreign chains may live in inet filter too.
 add table inet filter
-delete table inet filter
+add set inet filter dns_clients { type ipv4_addr; }
+flush set inet filter dns_clients
+add chain inet filter matrix_services
+flush chain inet filter matrix_services
+add chain inet filter input { type filter hook input priority 0; policy drop; }
+flush chain inet filter input
+add chain inet filter forward { type filter hook forward priority 0; policy drop; }
+flush chain inet filter forward
+add chain inet filter output { type filter hook output priority 0; policy accept; }
+flush chain inet filter output
 
 table inet filter {
     # DNS clients of the local resolver (unbound) - access nodes only.
