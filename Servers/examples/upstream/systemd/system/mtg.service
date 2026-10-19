@@ -1,0 +1,17 @@
+[Unit]
+Description=MTProxy (mtg) for Telegram
+After=network.target nginx.service
+
+[Service]
+Type=simple
+User=mtproxy
+Group=mtproxy
+ExecStart=/usr/local/bin/mtg run /etc/mtproxy/mtg.toml
+Restart=on-failure
+RestartSec=5
+Environment=GOMEMLIMIT=20MiB
+MemoryMax=32M
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

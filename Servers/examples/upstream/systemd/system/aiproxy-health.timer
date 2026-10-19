@@ -1,0 +1,7 @@
+[Unit]
+Description=Periodic local Squid readiness check
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=30s
+[Install]
+WantedBy=timers.target

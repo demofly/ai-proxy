@@ -1,0 +1,59 @@
+{
+    "budget": {
+        "bytes": 398458880,
+        "mb": 380,
+        "target_bytes": 335893845
+    },
+    "plan": {
+        "fits": true,
+        "limits": {
+            "crowdsec": 192,
+            "crowdsec_bouncer": 24,
+            "haveged": 8,
+            "health": 8,
+            "keepalived": 12,
+            "mtg": 32,
+            "nginx": 48,
+            "squid": 64,
+            "unbound": 24
+        },
+        "minimum_mb": 380,
+        "total_mb": 380
+    },
+    "ram_mb": 961,
+    "system_reserved_mb": 241,
+    "units": [
+        {
+            "memory_mb": "64",
+            "name": "squid.service"
+        },
+        {
+            "memory_mb": "24",
+            "name": "unbound.service"
+        },
+        {
+            "memory_mb": "8",
+            "name": "haveged.service"
+        },
+        {
+            "memory_mb": "8",
+            "name": "aiproxy-health.service"
+        },
+        {
+            "memory_mb": "48",
+            "name": "nginx.service"
+        },
+        {
+            "memory_mb": "12",
+            "name": "keepalived.service"
+        },
+        {
+            "memory_mb": "192",
+            "name": "crowdsec.service"
+        },
+        {
+            "memory_mb": "24",
+            "name": "crowdsec-firewall-bouncer.service"
+        }
+    ]
+}

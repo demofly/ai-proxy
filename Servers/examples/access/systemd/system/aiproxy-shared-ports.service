@@ -1,0 +1,10 @@
+[Unit]
+Description=Shared services port contract for ai-proxy
+After=network-pre.target nftables.service aiproxy-firewall.service
+Before=nginx.service matrix-synapse.service livekit.service coturn.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/aiproxy-apply-shared-ports
+[Install]
+WantedBy=multi-user.target

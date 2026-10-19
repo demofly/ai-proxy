@@ -1,0 +1,17 @@
+// Развёрнуто Ansible (ai-assistants-proxy). Правки вручную будут перезаписаны.
+//
+// Только источники обновлений безопасности: смену стабильных версий
+// выполняет Ansible, а не фоновый таймер.
+//
+// #clear обязателен: перечень в apt.conf — список, и повторное
+// объявление ДОПОЛНЯЕТ его, а не заменяет. Без очистки строки ниже
+// были бы украшением, а действовал бы перечень из 50unattended-upgrades
+// вместе со всем, что туда дописали до нас.
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename},label=Debian-Security";
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+    "origin=Ubuntu,archive=${distro_codename}-security";
+};
+// Перезагрузка — только руками оператора (см. комментарий в playbook).
+Unattended-Upgrade::Automatic-Reboot "false";

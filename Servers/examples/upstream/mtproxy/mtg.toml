@@ -1,0 +1,13 @@
+# Ansible managed
+# mtg v2 configuration (TOML)
+# Docs: https://github.com/9seconds/mtg
+
+secret = "ee000000000000000000000000000000006d61782e7275"
+bind-to = "127.0.0.1:2083"
+
+# Fake-TLS hostname is encoded in the secret; mtg v2 has no fake-tls key.
+# Bound accepted sessions before the daemon can exhaust its FD/RAM budget.
+concurrency = 100
+[network]
+[network.timeout]
+idle = "5m"

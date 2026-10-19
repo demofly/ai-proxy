@@ -1,0 +1,27 @@
+# [AITS] 2026-08-30T11:03:01Z
+# Ansible managed
+# CrowdSec log acquisition — sources for attack detection
+
+# Журнал маршрутизации по имени SNI — обращения, прошедшие через порт 443.
+# Метка `nginx` выбрана не по имени службы, а по условию срабатывания парсера
+# `crowdsecurity/nginx-logs`: он отбирает события, чей источник начинается с «nginx».
+# Вид записи подогнан под него в шаблоне маршрутизатора.
+filenames:
+  - /var/log/nginx/sni-router.log
+labels:
+  type: nginx
+---
+
+# System auth — SSH brute-force, invalid users
+filenames:
+  - /var/log/auth.log
+labels:
+  type: syslog
+---
+
+# journald — sshd via systemd (дублирование для надёжности)
+source: journalctl
+journalctl_filter:
+  - "_SYSTEMD_UNIT=ssh.service"
+labels:
+  type: syslog

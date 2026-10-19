@@ -1,0 +1,12 @@
+# Ansible managed
+# This is the single Squid entry, replacing the distribution's same-named file.
+/var/log/squid/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    su proxy proxy
+}

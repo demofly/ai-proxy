@@ -1,0 +1,16 @@
+[Unit]
+Description=AI Proxy upstream firewall (SQUID-PROXY chain)
+DefaultDependencies=no
+After=local-fs.target
+Documentation=file:///etc/iptables/aiproxy-upstream.rules
+Wants=network-pre.target
+Before=network-pre.target nginx.service squid.service unbound.service mtg.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -ec 'iptables-restore --wait 10 --noflush /etc/iptables/aiproxy-upstream.rules; iptables -C INPUT -j SQUID-PROXY 2>/dev/null || iptables --wait 10 -I INPUT 1 -j SQUID-PROXY'
+ExecStart=/bin/sh -ec 'ip6tables-restore --wait 10 --noflush /etc/iptables/aiproxy-upstream-v6.rules; ip6tables -C INPUT -j SQUID-PROXY 2>/dev/null || ip6tables --wait 10 -I INPUT 1 -j SQUID-PROXY'
+
+[Install]
+WantedBy=multi-user.target

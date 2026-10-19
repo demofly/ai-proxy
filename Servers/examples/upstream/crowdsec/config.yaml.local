@@ -1,0 +1,2 @@
+db_config:
+    max_open_conns: 1

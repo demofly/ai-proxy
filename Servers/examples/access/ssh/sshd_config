@@ -1,0 +1,2 @@
+# Only the ai-proxy setting; not a complete sshd_config.
+UseDNS no

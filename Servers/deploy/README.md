@@ -3,6 +3,10 @@
 
 Автоматизированное развертывание AI Proxy на базе Squid.
 
+Готовые конфигурации на вымышленных узлах, включая nginx, HTTPS/ACME, MTProxy,
+DNS, firewall и systemd: [Servers/examples](../examples/README.md).
+Они генерируются из действующих шаблонов и задач без рабочего inventory и секретов.
+
 ## Структура
 
 ```

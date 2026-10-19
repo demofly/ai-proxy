@@ -1,0 +1,40 @@
+# [AITS] 2026-08-30T11:03:01Z
+# Ansible managed
+# CrowdSec log acquisition — sources for attack detection
+
+# Журнал обращений Squid.
+# ВНИМАНИЕ: разбора этих записей сейчас НЕТ. Проверено по индексу хаба CrowdSec
+# 2026-08-30: ни коллекции, ни парсера, ни сценария для Squid не существует вовсе —
+# ни у crowdsecurity, ни у сторонних авторов. Метка `squid` не совпадает ни с одним
+# фильтром, и записи молча отбрасываются. Источник оставлен намеренно: он станет
+# рабочим в тот день, когда появится парсер (собственный либо хабовый), и его
+# отсутствие здесь было бы труднее заметить, чем бездействующую строку с пояснением.
+# Обнаружение по обращениям через прокси обеспечивает журнал маршрутизации ниже.
+filenames:
+  - /var/log/squid/access.log
+labels:
+  type: squid
+---
+# Журнал маршрутизации по имени SNI — обращения, прошедшие через порт 443.
+# Метка `nginx` выбрана не по имени службы, а по условию срабатывания парсера
+# `crowdsecurity/nginx-logs`: он отбирает события, чей источник начинается с «nginx».
+# Вид записи подогнан под него в шаблоне маршрутизатора.
+filenames:
+  - /var/log/nginx/sni-router.log
+labels:
+  type: nginx
+---
+
+# System auth — SSH brute-force, invalid users
+filenames:
+  - /var/log/auth.log
+labels:
+  type: syslog
+---
+
+# journald — sshd via systemd (дублирование для надёжности)
+source: journalctl
+journalctl_filter:
+  - "_SYSTEMD_UNIT=ssh.service"
+labels:
+  type: syslog

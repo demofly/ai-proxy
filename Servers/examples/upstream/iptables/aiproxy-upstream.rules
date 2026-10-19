@@ -1,0 +1,46 @@
+# iptables ruleset - Upstream Proxy (chain SQUID-PROXY)
+# Managed by Ansible - DO NOT EDIT MANUALLY
+# Host: upstream-01 (198.51.100.11)
+#
+# Applied with `iptables-restore --noflush`: only the chain declared below is
+# replaced, and the replacement is one transaction — there is no intermediate
+# state with an empty chain in which port 53 would be open.
+#
+# Co-deployment (Matrix and others share these nodes): built-in chains
+# (INPUT/FORWARD/OUTPUT) and chains of other projects keep their rules, because
+# `--noflush` touches only what this file declares. For that reason the file
+# must never declare a built-in chain, and the jump from INPUT is managed
+# separately (an idempotent check-and-insert task), not from here.
+#
+# The same file is replayed at boot by aiproxy-firewall.service.
+*filter
+:SQUID-PROXY - [0:0]
+
+# Loopback returns to INPUT before any DROP below:
+# Squid and the system resolve through 127.0.0.1:53
+-A SQUID-PROXY -i lo -j RETURN
+
+# Squid only from access proxies
+-A SQUID-PROXY -s 203.0.113.1 -p tcp --dport 443 -j ACCEPT
+-A SQUID-PROXY -s 203.0.113.2 -p tcp --dport 443 -j ACCEPT
+
+# MTProxy TLS (nginx on 443) from access proxies
+-A SQUID-PROXY -s 203.0.113.1 -p tcp --dport 443 -j ACCEPT
+-A SQUID-PROXY -s 203.0.113.2 -p tcp --dport 443 -j ACCEPT
+
+# DNS (unbound) from access proxies - both transports
+-A SQUID-PROXY -s 203.0.113.1 -p tcp --dport 53 -m comment --comment "DNS from access proxy 203.0.113.1" -j ACCEPT
+-A SQUID-PROXY -s 203.0.113.1 -p udp --dport 53 -m comment --comment "DNS from access proxy 203.0.113.1" -j ACCEPT
+-A SQUID-PROXY -s 203.0.113.2 -p tcp --dport 53 -m comment --comment "DNS from access proxy 203.0.113.2" -j ACCEPT
+-A SQUID-PROXY -s 203.0.113.2 -p udp --dport 53 -m comment --comment "DNS from access proxy 203.0.113.2" -j ACCEPT
+
+# Everything else aimed at the protected ports is dropped.
+# Order matters: the chain is walked top-down, first match decides, and the
+# INPUT policy is ACCEPT — without these rules the ports stay open to everyone.
+-A SQUID-PROXY -p tcp --dport 443 -j DROP
+-A SQUID-PROXY -p tcp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
+-A SQUID-PROXY -p udp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
+
+# Traffic to any other port is left to INPUT and to other projects' chains
+-A SQUID-PROXY -j RETURN
+COMMIT

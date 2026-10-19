@@ -1,0 +1,33 @@
+#!/bin/bash
+# Ansible managed
+# Local readiness only: an unavailable website/parent must never trigger restart.
+set -u
+STATE=/run/aiproxy-squid-health
+COOLDOWN=30
+exec 9>"${STATE}.lock"
+/usr/bin/flock -n 9 || exit 0
+
+# Bypass proxy environment variables and require an actual manager response.
+if /usr/bin/curl --noproxy '*' --silent --fail --max-time 2 \
+    'http://127.0.0.1:3129/squid-internal-mgr/info' \
+    | /usr/bin/grep -q 'Squid Object Cache'; then
+    printf '0\n' > "${STATE}.failures"
+    exit 0
+fi
+
+failures=0
+if [ -r "${STATE}.failures" ]; then read -r failures < "${STATE}.failures"; fi
+case "$failures" in ''|*[!0-9]*) failures=0;; esac
+failures=$((failures + 1))
+printf '%s\n' "$failures" > "${STATE}.failures"
+if [ "$failures" -lt 3 ]; then exit 1; fi
+
+now=$(date +%s)
+previous=0
+if [ -r "${STATE}.restart" ]; then read -r previous < "${STATE}.restart"; fi
+case "$previous" in ''|*[!0-9]*) previous=0;; esac
+if [ $((now - previous)) -lt "$COOLDOWN" ]; then exit 1; fi
+printf '%s\n' "$now" > "${STATE}.restart"
+logger -t aiproxy-health 'Squid failed consecutive local manager checks; restarting'
+/usr/bin/systemctl --no-block restart squid
+exit 1

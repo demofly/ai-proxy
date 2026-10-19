@@ -1,0 +1,9 @@
+# Ansible managed
+[Unit]
+Description=Complete ai-proxy deployment memory budget
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=infinity
+MemoryMax=419430400
+MemorySwapMax=0

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check local Squid readiness and recover stalled service
+After=squid.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/aiproxy-check-squid
+TimeoutStartSec=10s
+Slice=aiproxy.slice
+MemoryMax=8M
+MemorySwapMax=0
