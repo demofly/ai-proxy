@@ -9,7 +9,7 @@ import sys
 def verify(units, slice_name='aiproxy.slice', cgroup_root=Path('/sys/fs/cgroup')):
     command = ['systemctl', 'show', *[unit['name'] for unit in units], slice_name,
                              '--property=Id', '--property=ControlGroup', '--property=MemoryMax',
-                             '--property=Slice', '--property=NeedDaemonReload']
+                             '--property=Slice', '--property=NeedDaemonReload', '--property=ActiveState']
 
     def snapshot():
         result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -34,7 +34,17 @@ def verify(units, slice_name='aiproxy.slice', cgroup_root=Path('/sys/fs/cgroup')
             raise ValueError('Настроенные пределы или slice не совпадают с планом: ' + unit['name'])
         group = props.get('ControlGroup', '')
         if group:
-            live = (cgroup_root / group.lstrip('/') / 'memory.max').read_text().strip()
+            try:
+                live = (cgroup_root / group.lstrip('/') / 'memory.max').read_text().strip()
+            except FileNotFoundError:
+                # A timer's oneshot may finish and remove its cgroup after show.
+                # Only a confirmed inactive unit can skip the live check; its
+                # configured cap and slice still have to match the plan.
+                fresh = snapshot().get(unit['name'], {})
+                if (fresh.get('ActiveState') in ('inactive', 'failed') and
+                        fresh.get('MemoryMax') == str(cap) and fresh.get('Slice') == slice_name):
+                    continue
+                raise
             if live != str(cap):
                 raise ValueError('Действующий предел cgroup не совпадает с планом: ' + unit['name'])
     return {'verified': len(units), 'reloaded': reloaded}

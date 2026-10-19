@@ -33,6 +33,25 @@ class ResourceProbeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     probe.verify([{'name': 'test.service', 'memory_mb': 64}])
 
+    def test_completed_oneshot_cgroup_race_is_rechecked_without_weakening_caps(self):
+        base = f'Id=health.service\nSlice=aiproxy.slice\nMemoryMax={8 * 1048576}\n'
+        initial = base + 'ControlGroup=/health.service\nActiveState=active\n'
+        for final, accepted in (
+                (base + 'ControlGroup=\nActiveState=inactive\n', True),
+                (base + 'ControlGroup=/health.service\nActiveState=active\n', False),
+                (base.replace(str(8 * 1048576), 'max') + 'ActiveState=inactive\n', False)):
+            with self.subTest(final=final), tempfile.TemporaryDirectory() as directory:
+                responses = [subprocess.CompletedProcess([], 0, initial),
+                             subprocess.CompletedProcess([], 0, final)]
+                with patch.object(probe.subprocess, 'run', side_effect=responses) as run:
+                    if accepted:
+                        self.assertEqual(probe.verify([{'name': 'health.service', 'memory_mb': 8}],
+                                                      cgroup_root=Path(directory))['verified'], 1)
+                    else:
+                        with self.assertRaises(FileNotFoundError):
+                            probe.verify([{'name': 'health.service', 'memory_mb': 8}], cgroup_root=Path(directory))
+                    self.assertEqual(run.call_count, 2)
+
     def test_interrupted_unit_update_is_recovered_before_validation(self):
         old = 'Id=test.service\nMemoryMax=1\nNeedDaemonReload=yes\n'
         new = f'Id=test.service\nSlice=aiproxy.slice\nMemoryMax={64 * 1048576}\nControlGroup=\nNeedDaemonReload=no\n'
