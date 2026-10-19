@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import re
+import runpy
 from pathlib import Path
 import shutil
 import socket
@@ -14,6 +15,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -27,6 +29,43 @@ ENV.filters.update(bool=lambda x: str(x).lower() in ('true', 'yes', '1'), to_jso
 
 
 class DnsEndpointsTests(unittest.TestCase):
+    def test_paths_follow_each_upstream_in_url_and_dns_stamp(self):
+        values = dns.dns_doh_upstreams(['a', 'b', 'default'], {
+            'a': {'ansible_host': '192.0.2.1', 'dns_doh_path': '/private/dns-query'},
+            'b': {'ansible_host': '2001:db8::1', 'dns_doh_path': '/resolve-v2', 'proxy_port': 9443},
+            'default': {'ansible_host': '192.0.2.2'}})
+        for value, path in zip(values, ('/private/dns-query', '/resolve-v2', '/q')):
+            self.assertTrue(value['url'].endswith(path))
+            encoded = value['stamp'].removeprefix('sdns://')
+            stamp = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
+            offset = 9
+            offset += 1 + stamp[offset]  # Literal IP.
+            self.assertEqual(stamp[offset], 0)  # Empty certificate hash list.
+            offset += 1
+            offset += 1 + stamp[offset]  # SNI and optional port.
+            self.assertEqual(stamp[offset], len(path))
+            self.assertEqual(stamp[offset + 1:].decode('ascii'), path)
+
+    def test_invalid_paths_are_rejected_before_deployment(self):
+        for path in ('', 'dns-query', '/q?dns=value', '/q#fragment', '/q\nserver:',
+                     '/q"', '/q\\extra', '/путь', '/bad%2', '/a/../b', '/' + 'a' * 255, None, 1):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                dns.dns_doh_upstreams(['a'], {'a': {'ansible_host': '192.0.2.1', 'dns_doh_path': path}})
+        for path in ('/', '/dns-query', '/nested/dns_query-v2', '/resolve%2Ddns'):
+            self.assertEqual(dns.validate_doh_path(path), path)
+
+    def test_public_healthcheck_uses_configured_path(self):
+        packet = struct.pack('!6H', 0xA17D, 0x8180, 1, 1, 0, 0)
+        response = subprocess.CompletedProcess([], 0, packet + b'\n2', b'')
+        with patch('sys.argv', ['check-doh.py', '--public', 'dns.example.test', '/public/resolve']), \
+                patch('subprocess.run', return_value=response) as run:
+            with self.assertRaises(SystemExit) as stopped:
+                runpy.run_path(str(ROOT / 'scripts/check-doh.py'), run_name='__main__')
+            self.assertEqual(stopped.exception.code, 0)
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[-1], 'https://dns.example.test/public/resolve')
+        self.assertNotIn('--insecure', argv)
+
     def test_literal_addresses_ports_and_ipv6_without_bootstrap(self):
         values = dns.dns_doh_upstreams(['v4', 'v6'], {
             'v4': {'ansible_host': '192.0.2.1'},
@@ -76,6 +115,8 @@ class NativeDohTests(unittest.TestCase):
                         '-keyout', str(root/'privkey.pem'), '-out', str(root/'fullchain.pem')],
                        check=True, capture_output=True)
         (root/'openssl.cnf').write_text(ENV.get_template('roles/dns_resolver/templates/openssl-doh.cnf.j2').render(ansible_managed='test'))
+        cls.public_path = '/public/dns-query'
+        cls.upstream_path = '/private/resolve-v2'
         common = dict(ansible_managed='test', _dns_threads=1, _dns_cache_mb=1,
                       _dns_allowed_clients=['127.0.0.1'], dns_resolver_dnssec=False,
                       dns_doh_enabled=True)
@@ -84,6 +125,7 @@ class NativeDohTests(unittest.TestCase):
                                 ('access', cls.plain_access, cls.h2_access)):
             values = dict(common, proxy_role=role, dns_resolver_port=port,
                           dns_doh_backend_port=doh, dns_doh_local_port=doh,
+                          dns_doh_path=cls.upstream_path if role == 'upstream' else cls.public_path,
                           _dns_forwarders=['127.0.0.1@' + str(cls.bridge)] if role == 'access' else ['192.0.2.99'])
             conf = template.render(values)
             conf = conf.replace('/etc/unbound/tls/doh.key', str(root/'privkey.pem'))
@@ -101,7 +143,8 @@ class NativeDohTests(unittest.TestCase):
         # One dead endpoint proves successful requests do not wait for all peers.
         cls.config = ENV.get_template('roles/dns_resolver/templates/dnsproxy.yml.j2').render(
             ansible_managed='test', dns_doh_bridge_port=cls.bridge,
-            _dns_doh_upstreams=[dns.doh_endpoint('127.0.0.1', cls.front), dns.doh_endpoint('127.0.0.1', 1)])
+            _dns_doh_upstreams=[dns.doh_endpoint('127.0.0.1', cls.front, path=cls.upstream_path),
+                                dns.doh_endpoint('127.0.0.1', 1, path=cls.upstream_path)])
         (root/'dnsproxy.yml').write_text(cls.config)
         cls.start([os.environ['AIPROXY_TEST_DNSPROXY'], '--config-path=' + str(root/'dnsproxy.yml')],
                   'bridge', cls.bridge, env=dict(os.environ, GOMEMLIMIT='16MiB', GOGC='50', GOMAXPROCS='1'))
@@ -168,7 +211,9 @@ stream {{
     def query(ident=1234):
         return struct.pack('!6H', ident, 0x0100, 1, 0, 0, 0) + b'\x07example\x03com\0\0\1\0\1'
 
-    def exchange(self, method='POST', path='/q', insecure=True, upstream=False):
+    def exchange(self, method='POST', path=None, insecure=True, upstream=False):
+        if path is None:
+            path = self.upstream_path if upstream else self.public_path
         port = self.doh_up if upstream else self.front
         command = ['curl', '--silent', '--show-error', '--http2', '--noproxy', '*',
                    '--max-time', '5', '--write-out', '\n%{http_code}:%{http_version}',
@@ -233,8 +278,18 @@ stream {{
         self.assertEqual(before, self.transit_connections())
 
     def test_wrong_http_endpoint_is_not_a_dns_endpoint(self):
-        response = self.exchange(path='/wrong')
-        self.assertNotIn(b'200:2', response.stdout)
+        for upstream in (False, True):
+            for path in ('/q', '/wrong'):
+                with self.subTest(upstream=upstream, path=path):
+                    response = self.exchange(path=path, upstream=upstream)
+                    self.assertNotIn(b'200:2', response.stdout)
+
+    def test_transit_healthcheck_uses_configured_path(self):
+        endpoints = [dns.doh_endpoint('127.0.0.1', self.front, path=self.upstream_path)]
+        result = subprocess.run(['python3', str(ROOT / 'scripts/check-doh.py'), json.dumps(endpoints)],
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)['verified'], 1)
 
     def test_parallel_local_dns_and_one_failed_doh_peer(self):
         def run(ident):

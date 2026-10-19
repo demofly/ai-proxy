@@ -50,6 +50,8 @@ dns_extra_clients: []
 
 # Внутренний TLS DoH Unbound; за SNI-маршрутизатором слушает только loopback.
 dns_doh_backend_port: 8443
+# URI-путь DoH на данном узле: общий для сервера, клиентов и проверок.
+dns_doh_path: /q
 # Внутренние порты access: локальный транспорт, HTTP/2 Unbound, TLS nginx.
 dns_doh_bridge_port: 5353
 dns_doh_local_port: 5443

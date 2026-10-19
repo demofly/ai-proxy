@@ -5,9 +5,10 @@
       - dns_resolver_port | default(53) | int == 53
       - dnsproxy_version | default('0.86.0') is match('^[0-9]+\.[0-9]+\.[0-9]+$')
       - groups.get('upstreams', []) | length > 0
+      - (dns_doh_path | default('/q') | validate_doh_path) is string
       - dns_doh_sni | default('dns.transit.internal') is match('^[A-Za-z0-9.-]+$')
       - dns_doh_sni | default('dns.transit.internal') | lower not in [squid_tls_sni | default('transit.internal') | lower, mtproxy_fake_tls_domain | default('max.ru') | lower, mtproxy_hostname | default('') | lower]
-    fail_msg: "Полный деплоймент требует локальный DNS на 53, непустой пул upstreams и версию dnsproxy в формате X.Y.Z."
+    fail_msg: "Полный деплоймент требует локальный DNS на 53, непустой пул upstreams, корректный dns_doh_path и версию dnsproxy в формате X.Y.Z."
 
 - name: "Проверить параметры публичного DoH"
   ansible.builtin.assert:

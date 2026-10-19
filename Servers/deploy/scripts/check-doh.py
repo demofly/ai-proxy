@@ -30,9 +30,10 @@ def check(url, insecure=True, resolve=None):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 3:
-        check('https://' + sys.argv[2] + '/q', insecure=False,
-              resolve=sys.argv[2] + ':443:127.0.0.1')
+    if sys.argv[1] == '--public':
+        hostname, path = sys.argv[2:]
+        check('https://' + hostname + path, insecure=False,
+              resolve=hostname + ':443:127.0.0.1')
         print(json.dumps({'verified': 1, 'http': '2', 'certificate': 'trusted'}))
         raise SystemExit(0)
     for endpoint in json.loads(sys.argv[1]):

@@ -115,8 +115,9 @@
       - python3
       - -c
       - "{{ lookup('file', playbook_dir ~ '/scripts/check-doh.py') }}"
-      - '[]'
+      - '--public'
       - "{{ dns_doh_hostname }}"
+      - "{{ dns_doh_path | default('/q') }}"
   register: _dns_public_response
   changed_when: false
   retries: 5

@@ -601,7 +601,8 @@ htpasswd -B -C 12 -bn пользователь пароль >> passwd
 | `dns_resolver_port` | Локальный DNS Unbound для Squid и системы | 53 |
 | `dns_doh_backend_port` | Внутренний TLS backend Unbound за SNI relay | 8443 |
 | `dns_doh_relay_port` / `dns_doh_sni` | Снятие PROXY и отдельный SNI на общем 443 | 4447 / dns.transit.internal |
-| `dns_doh_enabled` | Публичный DoH access `/q`, с автоматическим ACME | false |
+| `dns_doh_enabled` | Публичный DoH access, с автоматическим ACME | false |
+| `dns_doh_path` | URI-путь DoH на узле; используется сервером, клиентами и проверками | `/q` |
 | `dns_doh_hostname` / `dns_doh_acme_email` | Отдельное имя и контакт выпуска сертификата | задаются при включении |
 | `dns_resolver_threads` | Число рабочих потоков резолвера | по числу ядер узла |
 | `dns_resolver_cache_mb` | Объём кеша резолвера | доля предела памяти службы |
@@ -671,8 +672,17 @@ Squid / ОС → access Unbound 127.0.0.1:53
 access и `dns_extra_clients`. Отдельный SNI направляет TLS через loopback relay
 4447 в Unbound 8443; relay снимает PROXY-заголовок и проверяет ACL клиентов.
 Порт 8443 за nginx наружу не открыт. DNS stamps фиксируют IP и SNI без DNS bootstrap. Публичный DoH
-на access открыт всем, без авторизации и списка разрешённых клиентов; путь `/q`
+на access открыт всем, без авторизации и списка разрешённых клиентов; путь `dns_doh_path`
 поддерживает GET и POST в wire format RFC 8484 через HTTP/2.
+
+Путь задаётся в `all.vars` inventory; `/q` в схеме выше — значение по умолчанию.
+Например, `dns_doh_path: /dns-query` меняет путь всех DoH-серверов. Можно
+переопределить его в группе или на отдельном узле: access получает путь каждого
+upstream из его `hostvars`, независимо от собственного публичного пути.
+Публичный URL имеет вид `https://<dns_doh_hostname><dns_doh_path>`.
+Разрешён абсолютный ASCII URI-путь до 255 байт без query/fragment и сегментов
+`.` или `..`; параметры GET `?dns=...` добавляет клиент. После смены пути
+примените полный playbook на всех узлах и обновите URL внешних DoH-клиентов.
 
 Access обращается к upstream исключительно по DoH. В dnsproxy заданы DNS stamps со статическими
 IP и SNI, `insecure: true`, пустые bootstrap/fallback; открытого резервного
@@ -754,7 +764,9 @@ systemctl status unbound aiproxy-doh
 journalctl -u unbound -u aiproxy-doh -n 50
 
 # Публичный DoH GET; проверка TLS включена.
-curl --http2 --fail 'https://dns.example.com/q?dns=AAABAAABAAAAAAAAB2V4YW1wbGUDY29tAAABAAE' --output /tmp/dns-response.bin
+dns_doh_hostname=dns.example.com
+dns_doh_path=/q  # Значение из inventory.
+curl --http2 --fail "https://${dns_doh_hostname}${dns_doh_path}?dns=AAABAAABAAAAAAAAB2V4YW1wbGUDY29tAAABAAE" --output /tmp/dns-response.bin
 
 # Действующие ограничения upstream.
 iptables -S SQUID-PROXY | grep -E '443|8443|53'

@@ -108,7 +108,7 @@
       - python3
       - -c
       - "{{ lookup('file', playbook_dir ~ '/scripts/check-doh.py') }}"
-      - "{{ ([{'url': 'https://' ~ (dns_doh_sni | default('dns.transit.internal')) ~ '/q', 'resolve': (dns_doh_sni | default('dns.transit.internal')) ~ ':443:127.0.0.1'}]) | to_json }}"
+      - "{{ ([{'url': 'https://' ~ (dns_doh_sni | default('dns.transit.internal')) ~ (dns_doh_path | default('/q')), 'resolve': (dns_doh_sni | default('dns.transit.internal')) ~ ':443:127.0.0.1'}]) | to_json }}"
   register: _dns_private_response
   changed_when: false
   retries: 5

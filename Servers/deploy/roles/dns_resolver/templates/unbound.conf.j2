@@ -27,7 +27,7 @@ server:
     http-notls-downstream: yes
 {% endif %}
 {% if proxy_role == 'upstream' or dns_doh_enabled | default(false) | bool %}
-    http-endpoint: "/q"
+    http-endpoint: {{ dns_doh_path | default('/q') | to_json }}
     http-max-streams: 16
     http-query-buffer-size: 256k
     http-response-buffer-size: 256k

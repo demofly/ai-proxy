@@ -4,7 +4,19 @@ import base64
 import re
 
 
-def doh_endpoint(address, port=443, hostname='dns.transit.internal'):
+DEFAULT_DOH_PATH = '/q'
+
+
+def validate_doh_path(path):
+    if (not isinstance(path, str) or len(path) > 255
+            or not re.fullmatch(r"/(?:[A-Za-z0-9._~!$&'()*+,;=:@/-]|%[0-9A-Fa-f]{2})*", path)
+            or any(segment in ('.', '..') for segment in path.split('/'))):
+        raise ValueError('dns_doh_path должен быть абсолютным ASCII URI-путём до 255 байт без query, fragment и сегментов «.» или «..».')
+    return path
+
+
+def doh_endpoint(address, port=443, hostname='dns.transit.internal', path=DEFAULT_DOH_PATH):
+    path = validate_doh_path(path)
     try:
         address = ipaddress.ip_address(str(address))
     except ValueError:
@@ -25,8 +37,8 @@ def doh_endpoint(address, port=443, hostname='dns.transit.internal'):
 
     # DNS stamp DoH: protocol, properties, literal IP, no cert hashes, SNI, path.
     # StaticResolver in dnsproxy uses the stamp's IP, never bootstrap DNS.
-    stamp = b'\x02' + bytes(8) + field(ip) + b'\0' + field(provider) + field('/q')
-    return {'url': f'https://{provider}/q', 'resolve': f'{hostname}:{port}:{ip}',
+    stamp = b'\x02' + bytes(8) + field(ip) + b'\0' + field(provider) + field(path)
+    return {'url': f'https://{provider}{path}', 'resolve': f'{hostname}:{port}:{ip}',
             'stamp': 'sdns://' + base64.urlsafe_b64encode(stamp).rstrip(b'=').decode()}
 
 
@@ -36,7 +48,8 @@ def dns_doh_upstreams(names, hostvars):
         config = hostvars[name]
         router = str(config.get('nginx_on_443', config.get('behind_nginx', True))).lower() in ('true', 'yes', '1', 'on')
         port = config.get('proxy_port', 443) if router else config.get('dns_doh_backend_port', 8443)
-        result.append(doh_endpoint(config['ansible_host'], port, config.get('dns_doh_sni', 'dns.transit.internal')))
+        result.append(doh_endpoint(config['ansible_host'], port, config.get('dns_doh_sni', 'dns.transit.internal'),
+                                   config.get('dns_doh_path', DEFAULT_DOH_PATH)))
     if not result:
         raise ValueError('Нужен хотя бы один DoH upstream.')
     return result
@@ -44,4 +57,4 @@ def dns_doh_upstreams(names, hostvars):
 
 class FilterModule:
     def filters(self):
-        return {'dns_doh_upstreams': dns_doh_upstreams}
+        return {'dns_doh_upstreams': dns_doh_upstreams, 'validate_doh_path': validate_doh_path}
