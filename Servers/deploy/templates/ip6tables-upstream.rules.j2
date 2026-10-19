@@ -12,7 +12,10 @@
 {% endif %}
 {% endif %}
 {% endfor %}
-{% for port in ([proxy_port | int, 53] + ([443] if mtproxy_enabled | default(false) | bool else [])) | unique %}
+{% for client in dns_allowed_clients | default([]) if ':' in client %}
+-A {{ squid_chain }} -s {{ client }} -p tcp --dport {{ (proxy_port if nginx_on_443 | default(behind_nginx | default(true)) | bool else dns_doh_backend_port | default(8443)) | int }} -j ACCEPT
+{% endfor %}
+{% for port in ([proxy_port | int, 53, dns_doh_backend_port | default(8443) | int] + ([443] if mtproxy_enabled | default(false) | bool else [])) | unique %}
 -A {{ squid_chain }} -p tcp --dport {{ port }} -j DROP
 {% endfor %}
 -A {{ squid_chain }} -p udp --dport 53 -j DROP

@@ -47,3 +47,21 @@ dns_resolver_prefetch: true
 # Расширяет allowlist разом для unbound access-control и правил firewall.
 # Пусто — доступ к резолверу upstream имеют только access-ноды из inventory.
 dns_extra_clients: []
+
+# Внутренний TLS DoH Unbound; за SNI-маршрутизатором слушает только loopback.
+dns_doh_backend_port: 8443
+# Внутренние порты access: локальный транспорт, HTTP/2 Unbound, TLS nginx.
+dns_doh_bridge_port: 5353
+dns_doh_local_port: 5443
+dns_doh_tls_port: 4446
+# Публичный DoH требует отдельное DNS-имя и email ACME в inventory.
+dns_doh_enabled: false
+# Версия и SHA256 опубликованных архивов AdGuardTeam/dnsproxy.
+dnsproxy_version: '0.86.0'
+dnsproxy_checksums:
+  amd64: sha256:17ac43f76ebfcedf547c663f6f31aa70e68b8eb6fc41d2fc37d3bfe21a2ced66
+  arm64: sha256:eda840d39da0c2777ea2431d3d73407e813e3fc0e411bfe256a9fb4b97d08247
+
+# Отдельные SNI и loopback-relay межсерверного DoH на общем внешнем 443.
+dns_doh_sni: dns.transit.internal
+dns_doh_relay_port: 4447

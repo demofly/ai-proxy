@@ -4,21 +4,38 @@
 #
 # Роль {{ proxy_role }}:
 {% if proxy_role == 'access' %}
-#   Форвардит запросы ТОЛЬКО на unbound upstream-нод (не в публичный интернет)
+#   Unbound → локальный транспорт → DoH upstream, без открытого DNS fallback
 {% else %}
-#   Форвардит запросы на публичные DNS-серверы через DNS-over-TLS
+#   Принимает DoH от access; обращается к dns_servers по обычному DNS
 {% endif %}
 
 server:
-    # Слушаем только localhost — внешний доступ не нужен
-{% if proxy_role == 'upstream' %}
-    # + адрес хоста для приёма запросов от access-нод
-    interface: 0.0.0.0
-    # interface: {{ ansible_host }}
-{% else %}
+    # Plain DNS never listens on a public interface, including during migration.
     interface: 127.0.0.1
-{% endif %}
     port: {{ dns_resolver_port | default(53) }}
+{% if proxy_role == 'upstream' %}
+    interface: {{ '127.0.0.1' if nginx_on_443 | default(behind_nginx | default(true)) | bool else '0.0.0.0' }}@{{ dns_doh_backend_port | default(8443) | int }}
+{% if not (nginx_on_443 | default(behind_nginx | default(true)) | bool) and _dns_allowed_clients | default([]) | select('search', ':') | list | length > 0 %}
+    interface: ::0@{{ dns_doh_backend_port | default(8443) | int }}
+{% endif %}
+    https-port: {{ dns_doh_backend_port | default(8443) | int }}
+    tls-service-key: "/etc/unbound/tls/doh.key"
+    tls-service-pem: "/etc/unbound/tls/doh.pem"
+{% elif dns_doh_enabled | default(false) | bool %}
+    interface: 127.0.0.1@{{ dns_doh_local_port | default(5443) | int }}
+    https-port: {{ dns_doh_local_port | default(5443) | int }}
+    http-notls-downstream: yes
+{% endif %}
+{% if proxy_role == 'upstream' or dns_doh_enabled | default(false) | bool %}
+    http-endpoint: "/q"
+    http-max-streams: 16
+    http-query-buffer-size: 256k
+    http-response-buffer-size: 256k
+    incoming-num-tcp: 16
+    # Transit HTTP/2 connections persist for five idle minutes, matching dnsproxy.
+    # Public client connections keep a shorter resource bound.
+    tcp-idle-timeout: {{ 300000 if proxy_role == 'upstream' else 30000 }}
+{% endif %}
 
     # Доступ: localhost всегда, access-ноды — только на upstream.
     # Список клиентов общий с правилами firewall (dns_allowed_clients),
@@ -28,13 +45,17 @@ server:
     access-control: 127.0.0.0/8 allow
 {% if proxy_role == 'upstream' %}
 {% for client in _dns_allowed_clients | default([]) %}
-    access-control: {{ client }}/32 allow
+    access-control: {{ client }}{{ '/128' if ':' in client else '/32' }} allow
 {% endfor %}
 {% endif %}
     # deny, а не refuse: запрос отбрасывается без ответа. REFUSED — это ответ,
     # то есть отклик сканеру и плечо для отражённого трафика.
     access-control: 0.0.0.0/0 deny
+    access-control: ::/0 deny
 
+{% if proxy_role == 'access' %}
+    do-not-query-localhost: no
+{% endif %}
     # Производительность: потоки по числу ядер
     num-threads: {{ _dns_threads }}
 
@@ -132,7 +153,8 @@ forward-zone:
 {% if proxy_role == 'upstream' %}
     # Публичные DNS-резолверы из dns_servers (plain DNS, порт 53)
 {% else %}
-    # Access: форвардинг на unbound upstream-нод (plain DNS)
+    # Local bridge only; the inter-server connection is exclusively HTTPS.
+    forward-first: no
 {% endif %}
 {% for server in _dns_forwarders %}
     forward-addr: {{ server }}

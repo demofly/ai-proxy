@@ -4,7 +4,7 @@
 #
 # Архитектура:
 #   upstream — резолвит через публичные DNS (dns_servers из inventory)
-#   access   — резолвит ТОЛЬКО через unbound на upstream-нодах
+#   access   — Unbound → локальный dnsproxy → DoH upstream (TLS verify off)
 #
 # Зависимости: dns-root-data (Debian) для DNSSEC trust anchor
 
@@ -36,6 +36,8 @@
     name:
       - unbound
       - dns-root-data
+      - curl
+      - openssl
     state: "{{ pkg_state }}"
   when: ansible_os_family == 'Debian'
   throttle: 1
@@ -44,9 +46,25 @@
   ansible.builtin.dnf:
     name:
       - unbound
+      - curl
+      - openssl
     state: "{{ pkg_state }}"
   when: ansible_os_family == 'RedHat'
   throttle: 1
+
+- name: "Исключить занятие нового DNS backend чужой службой"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import subprocess,sys
+        output = subprocess.check_output(['ss', '-H', '-ltnp', 'sport = :' + sys.argv[1]], text=True)
+        if any('"unbound"' not in line for line in output.splitlines()):
+            raise SystemExit('Порт DNS backend занят другой службой; выберите свободный внутренний порт')
+      - "{{ (dns_doh_backend_port | default(8443) if proxy_role == 'upstream' else dns_doh_local_port | default(5443)) | int | string }}"
+  changed_when: false
+  when: proxy_role == 'upstream' or dns_doh_enabled | default(false) | bool
 
 # DNSSEC root trust anchor — /var/lib/unbound/ writable для unbound
 - name: "Создать каталог данных Unbound"
@@ -57,13 +75,25 @@
     group: unbound
     mode: '0755'
 
-- name: "Инициализировать корневой ключ доверия DNSSEC"
+- name: "Инициализировать корневой ключ DNSSEC из подписанного пакета ОС"
+  ansible.builtin.copy:
+    src: /usr/share/dns/root.key
+    dest: /var/lib/unbound/root.key
+    remote_src: true
+    force: false
+    owner: unbound
+    group: unbound
+    mode: '0644'
+  when: ansible_os_family == 'Debian'
+
+- name: "Инициализировать корневой ключ доверия DNSSEC на RHEL"
   ansible.builtin.command: unbound-anchor -a /var/lib/unbound/root.key
   args:
     creates: /var/lib/unbound/root.key
   register: _anchor_result
   # unbound-anchor returns 1 when it updates the key (normal), 0 when unchanged
   failed_when: _anchor_result.rc not in [0, 1]
+  when: ansible_os_family == 'RedHat'
 
 - name: "Установить владельца корневого ключа DNSSEC"
   ansible.builtin.file:
@@ -71,6 +101,14 @@
     owner: unbound
     group: unbound
     mode: '0644'
+
+- name: "Подготовить DoH на upstream"
+  ansible.builtin.include_tasks: doh-upstream.yml
+  when: proxy_role == 'upstream'
+
+- name: "Подготовить транспорт DoH на access"
+  ansible.builtin.include_tasks: doh-bridge.yml
+  when: proxy_role == 'access'
 
 # Кому разрешено обращаться к резолверу (upstream слушает внешний адрес).
 # Основной источник — dns_allowed_clients из playbook.yml, общий с правилами
@@ -85,10 +123,10 @@
 
 # Определяем upstream DNS-серверы в зависимости от роли
 # access → unbound на upstream-нодах; upstream → публичные DNS из inventory
-- name: "Настроить пересылку DNS с access на Unbound upstream"
+- name: "Направить Unbound access в локальный транспорт DoH"
   ansible.builtin.set_fact:
     _dns_forwarders: >-
-      {{ groups['upstreams'] | map('extract', hostvars, 'ansible_host') | list }}
+      {{ ['127.0.0.1@' ~ (dns_doh_bridge_port | default(5353) | string)] }}
   when: proxy_role == 'access'
 
 - name: "Настроить пересылку DNS с upstream на публичные резолверы"
@@ -99,112 +137,12 @@
 - name: "Разместить конфигурацию Unbound"
   ansible.builtin.template:
     src: unbound.conf.j2
-    dest: /etc/unbound/unbound.conf
+    dest: /etc/unbound/unbound.conf.aiproxy-staged
     owner: root
     group: root
     mode: '0644'
     validate: 'unbound-checkconf %s'
-  notify: "Перезапустить Unbound"
+
 
 # Firewall: DNS-правила для upstream управляются в основном playbook
 # (nftables-upstream.conf.j2 / iptables / ufw)
-
-# Отключаем systemd-resolved если он занимает порт 53
-- name: "Проверить состояние systemd-resolved"
-  ansible.builtin.command: systemctl is-active systemd-resolved
-  register: _resolved_status
-  changed_when: false
-  failed_when: false
-
-- name: "Отключить локальный DNS-слушатель systemd-resolved"
-  when: _resolved_status.stdout == 'active'
-  block:
-    - name: "Создать каталог переопределений systemd-resolved"
-      ansible.builtin.file:
-        path: /etc/systemd/resolved.conf.d
-        state: directory
-        owner: root
-        group: root
-        mode: '0755'
-
-    - name: "Отключить DNSStubListener"
-      ansible.builtin.copy:
-        dest: /etc/systemd/resolved.conf.d/no-stub.conf
-        content: |
-          [Resolve]
-          DNSStubListener=no
-        owner: root
-        group: root
-        mode: '0644'
-      register: _stub_disabled
-
-    - name: "Перезапустить systemd-resolved для освобождения порта 53"
-      ansible.builtin.systemd:
-        name: systemd-resolved
-        state: restarted
-      when: _stub_disabled.changed
-
-    - name: "Направить системный DNS на локальный Unbound"
-      ansible.builtin.copy:
-        dest: /etc/resolv.conf
-        content: |
-          # Managed by Ansible (dns_resolver role)
-          nameserver 127.0.0.1
-        owner: root
-        group: root
-        mode: '0644'
-
-- name: "Направить системный DNS на локальный Unbound без systemd-resolved"
-  ansible.builtin.copy:
-    dest: /etc/resolv.conf
-    content: |
-      # Managed by Ansible (dns_resolver role)
-      nameserver 127.0.0.1
-    owner: root
-    group: root
-    mode: '0644'
-  when: _resolved_status.stdout != 'active'
-
-- name: "Включить автозапуск и запустить Unbound"
-  ansible.builtin.systemd:
-    name: unbound
-    enabled: true
-    state: started
-
-# Перезапуск по изменению конфигурации применяется здесь, а не в конце плея.
-# Причина: (1) следующая задача проверяет слушателя, и без сброса очереди она
-# сверяла бы прежний процесс; (2) при обрыве плея на любой более поздней задаче
-# handler не выполнился бы вовсе — резолвер молча остался бы со старой
-# конфигурацией, а повторный прогон его бы не починил (шаблон уже не меняется).
-- name: "Выполнить ожидающий перезапуск Unbound"
-  ansible.builtin.meta: flush_handlers
-
-# а процесс — слушать не там. Для upstream внешний адрес обязателен: именно
-# на него ходят access-ноды.
-# Расхождение процесса с конфигурацией — это дрейф состояния, поэтому оно
-# устраняется перезапуском и перепроверяется; отказ выносится только если
-# слушателя нет и после перезапуска.
-- name: "Проверить доступность настроенных слушателей Unbound"
-  block:
-    - name: "Проверить слушатели Unbound"
-      ansible.builtin.wait_for:
-        host: "{{ item }}"
-        port: "{{ dns_resolver_port | default(53) }}"
-        state: started
-        timeout: 15
-      loop: "{{ _dns_listen_addresses }}"
-  rescue:
-    - name: "Перезапустить Unbound при расхождении состояния с конфигурацией"
-      ansible.builtin.systemd:
-        name: unbound
-        state: restarted
-
-    - name: "Повторно проверить слушатели Unbound после перезапуска"
-      ansible.builtin.wait_for:
-        host: "{{ item }}"
-        port: "{{ dns_resolver_port | default(53) }}"
-        state: started
-        timeout: 15
-      loop: "{{ _dns_listen_addresses }}"
-  vars:
-    _dns_listen_addresses: "{{ ['127.0.0.1'] + ([ansible_host] if proxy_role == 'upstream' else []) }}"

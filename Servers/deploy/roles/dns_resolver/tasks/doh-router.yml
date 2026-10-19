@@ -1,0 +1,100 @@
+---
+- name: "Подготовить общий nginx upstream для DoH"
+  ansible.builtin.include_role:
+    name: mtproxy
+    tasks_from: router
+  when: not (_aiproxy_upstream_router_prepared | default(false) | bool)
+
+- name: "Исключить конфликт имени и порта частного DoH"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import pathlib, subprocess, sys
+        name, port = sys.argv[1:]
+        own = pathlib.Path('/etc/nginx/stream.d/13-aiproxy-doh-upstream.conf')
+        for path in pathlib.Path('/etc/nginx/stream.d/sni-map.d').glob('*.conf'):
+            if path.name == 'aiproxy-doh-upstream.conf':
+                continue
+            for line in path.read_text().splitlines():
+                words = line.split()
+                if words and words[0].strip('"').lower() == name.lower():
+                    raise SystemExit('SNI частного DoH занят другим проектом')
+        output = subprocess.check_output(['ss', '-H', '-ltnp', 'sport = :' + port], text=True)
+        expected = 'listen 127.0.0.1:' + port + ' proxy_protocol;'
+        if output.strip() and (not own.exists() or expected not in own.read_text() or
+                               any('"nginx"' not in line for line in output.splitlines())):
+            raise SystemExit('Порт relay частного DoH занят другой конфигурацией')
+      - "{{ dns_doh_sni | default('dns.transit.internal') }}"
+      - "{{ dns_doh_relay_port | default(4447) | int | string }}"
+  changed_when: false
+
+- name: "Сохранить частные маршруты DoH перед изменением"
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop:
+    - /etc/nginx/stream.d/13-aiproxy-doh-upstream.conf
+    - /etc/nginx/stream.d/sni-map.d/aiproxy-doh-upstream.conf
+  register: _dns_private_previous
+  failed_when: false
+
+- name: "Настроить частный маршрут DoH с откатом"
+  block:
+    - name: "Разместить частный DoH relay и маршрут SNI"
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: '0644'
+      loop:
+        - {src: 13-aiproxy-doh-upstream.conf.j2, dest: /etc/nginx/stream.d/13-aiproxy-doh-upstream.conf}
+        - {src: aiproxy-doh-upstream-sni.conf.j2, dest: /etc/nginx/stream.d/sni-map.d/aiproxy-doh-upstream.conf}
+      register: _dns_upstream_routes
+      notify: "Перечитать конфигурацию nginx для MTProxy"
+
+    - name: "Проверить nginx с частным маршрутом DoH"
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+
+  rescue:
+    - name: "Восстановить прежние частные маршруты DoH"
+      ansible.builtin.copy:
+        content: "{{ item.content | b64decode }}"
+        dest: "{{ item.source }}"
+        mode: '0644'
+      loop: "{{ _dns_private_previous.results }}"
+      when: item.content is defined
+
+    - name: "Удалить новые частные маршруты DoH после ошибки"
+      ansible.builtin.file:
+        path: "{{ item.item }}"
+        state: absent
+      loop: "{{ _dns_private_previous.results }}"
+      when: item.content is not defined
+
+    - name: "Остановить применение после отката частного DoH"
+      ansible.builtin.fail:
+        msg: "Частный DoH не прошёл проверку nginx; прежние фрагменты восстановлены."
+
+- name: "Сверить частный DoH с последним успешным применением nginx"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "{{ lookup('file', playbook_dir ~ '/scripts/nginx-doh-state.py') }}"
+      - '{{ ["/etc/nginx/stream.d/13-aiproxy-doh-upstream.conf", "/etc/nginx/stream.d/sni-map.d/aiproxy-doh-upstream.conf"] | to_json }}'
+      - /etc/nginx/.aiproxy-doh-upstream-applied
+  register: _dns_private_nginx_state
+  changed_when: "(_dns_private_nginx_state.stdout | default('{\"needs_apply\":false}', true) | from_json).needs_apply"
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+  when: not ansible_check_mode
+
+- name: "Применить подготовленную инфраструктуру upstream nginx"
+  ansible.builtin.meta: flush_handlers
+
+- name: "Запустить частный маршрут DoH до переключения access"
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started

@@ -5,5 +5,5 @@ Description=Complete ai-proxy deployment memory budget
 [Slice]
 MemoryAccounting=yes
 MemoryHigh=infinity
-MemoryMax=398458880
+MemoryMax=432013312
 MemorySwapMax=0

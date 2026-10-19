@@ -16,7 +16,9 @@
 - name: "Собрать порты слушателей узла"
   ansible.builtin.set_fact:
     _proxy_listener_ports: >-
-      {{ [proxy_port, squid_mgmt_port | default(3129)]
+      {{ [proxy_port, squid_mgmt_port | default(3129), dns_resolver_port | default(53)]
+         + ([dns_doh_backend_port | default(8443)] + ([dns_doh_relay_port | default(4447)] if nginx_on_443 | bool else []) if proxy_role == 'upstream' else [dns_doh_bridge_port | default(5353)])
+         + ([dns_doh_local_port | default(5443), dns_doh_tls_port | default(4446)] if proxy_role == 'access' and dns_doh_enabled | default(false) | bool else [])
          + ([squid_local_port | default(3128)] if nginx_on_443 | bool else [])
          + ([https_proxy_local_port | default(4445)] if https_proxy_enabled | default(false) | bool else [])
          + ([mtproxy_relay_port | default(9443)] if proxy_role == 'access' and mtproxy_enabled | default(false) | bool else [])

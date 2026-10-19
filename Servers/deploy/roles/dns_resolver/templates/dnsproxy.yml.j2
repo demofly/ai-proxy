@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+# Local transport bridge only. Caching and DNSSEC validation remain in Unbound.
+listen-addrs: [127.0.0.1]
+listen-ports: [{{ dns_doh_bridge_port | default(5353) | int }}]
+{% for endpoint in _dns_doh_upstreams %}
+# Static DoH endpoint: {{ endpoint.url }} via {{ endpoint.resolve }}
+{% endfor %}
+upstream: {{ _dns_doh_upstreams | map(attribute='stamp') | list | to_json }}
+# All endpoints are literal IPs: no DNS bootstrap or plaintext fallback.
+# The pinned v0.86.0 HTTP/2 transport pools connections with a 300s idle timeout.
+# Upstream Unbound enforces TLS 1.3; do not confuse server-side tls-min-version
+# in dnsproxy with its outgoing DoH transport options.
+bootstrap: []
+fallback: []
+insecure: true
+http3: false
+cache: false
+hosts-file-enabled: false
+pending-requests-enabled: true
+max-go-routines: 64
+timeout: 4s
+upstream-mode: parallel
+dnssec: true

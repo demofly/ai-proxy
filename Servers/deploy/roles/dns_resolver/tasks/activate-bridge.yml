@@ -1,0 +1,46 @@
+---
+- name: "Установить подготовленный конфиг транспорта DoH"
+  ansible.builtin.copy:
+    src: /etc/aiproxy/dnsproxy.yml.aiproxy-staged
+    dest: /etc/aiproxy/dnsproxy.yml
+    remote_src: true
+    mode: '0644'
+
+- name: "Установить подготовленную службу транспорта DoH"
+  ansible.builtin.copy:
+    src: /etc/aiproxy/aiproxy-doh.service
+    dest: /etc/systemd/system/aiproxy-doh.service
+    remote_src: true
+    mode: '0644'
+  register: _dns_bridge_live_unit
+
+- name: "Сверить транспорт DoH с последним успешным применением"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import hashlib, json, pathlib, subprocess
+        data = pathlib.Path('/etc/aiproxy/dnsproxy.yml').read_bytes()
+        data += pathlib.Path('/etc/systemd/system/aiproxy-doh.service').read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        marker = pathlib.Path('/etc/aiproxy/dnsproxy-applied.sha256')
+        state = subprocess.run(['systemctl', 'show', 'aiproxy-doh', '--property=NeedDaemonReload', '--property=LoadState'], text=True, capture_output=True)
+        reload = {{ _dns_bridge_live_unit.changed | ternary('True', 'False') }} or 'NeedDaemonReload=yes' in state.stdout or 'LoadState=loaded' not in state.stdout
+        print(json.dumps({'digest': digest, 'needs_apply': reload or not marker.exists() or marker.read_text().strip() != digest, 'needs_reload': reload}))
+  register: _dns_bridge_activation
+  changed_when: false
+  check_mode: false
+
+- name: "Применить транспорт DoH после готовности upstream"
+  ansible.builtin.systemd:
+    name: aiproxy-doh
+    enabled: true
+    state: "{{ 'restarted' if (_dns_bridge_activation.stdout | from_json).needs_apply else 'started' }}"
+    daemon_reload: "{{ (_dns_bridge_activation.stdout | from_json).needs_reload }}"
+
+- name: "Проверить локальный слушатель транспорта DoH"
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ dns_doh_bridge_port | default(5353) }}"
+    timeout: 10

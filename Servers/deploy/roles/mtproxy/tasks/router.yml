@@ -1,0 +1,187 @@
+---
+# [AITS] 2026-08-30T16:44:38Z
+
+# ===========================================================================
+# Фаза: инфраструктура nginx stream на upstream-узлах.
+# ai-proxy — владелец nginx на узле: nginx.conf и 00-sni-router.conf принадлежат
+# ему безусловно. Модульность обеспечивается предоставляемыми точками расширения:
+#   stream{}             → /etc/nginx/stream.d/*.conf          — потоковые блоки
+#   map{} маршрутизатора → /etc/nginx/stream.d/sni-map.d/*.conf — записи карты имён SNI
+#   http{}               → /etc/nginx/conf.d/*.conf            — виртуальные хосты HTTP
+# Сам MTProxy пользуется тем же контрактом: свой терминатор TLS и своя запись
+# карты имён кладутся под собственным префиксом, чужие файлы не читаются.
+# ===========================================================================
+
+# Признак первой установки снимается ДО установки: после неё «поставили
+# впервые» и «обновили версию» неразличимы — `changed` истинно в обоих случаях.
+# Наличие /etc/nginx/nginx.conf означает, что пакет на узле уже стоял, кем бы он
+# ни был поставлен: этим же проектом или соседним.
+- name: "Проверить наличие nginx до установки пакета на upstream"
+  ansible.builtin.stat:
+    path: /etc/nginx/nginx.conf
+  register: _nginx_present_before
+
+# ВНИМАНИЕ: nginx на узле ОДИН и разделяется с соседними проектами; роль
+# mtproxy ставит его вторым, независимым от роли nginx путём — на upstream-узлах.
+# Обновление пакета перезапускает службу силами postinst-сценария, и соединения
+# соседних проектов рвутся вместе с нашими. Последствие принято сознательно:
+# момент перезапуска приходится на прогон Ansible, известный оператору, а
+# конфигурация обоих проектов лежит на диске до обновления, поэтому служба
+# поднимается сразу в рабочем виде. `throttle: 1` не даёт разрыву совпасть на
+# нескольких узлах. Заморозить версию: service_upgrades_enabled=false в inventory.
+- name: "Установить nginx с модулем stream на upstream"
+  ansible.builtin.apt:
+    name:
+      - nginx
+      - libnginx-mod-stream
+    state: "{{ pkg_state }}"
+    update_cache: true
+    cache_valid_time: "{{ apt_cache_valid_time | default(3600) | int }}"
+  register: nginx_installed
+  throttle: 1
+
+# Fresh install: apt auto-starts nginx with default config.
+# Stop it — we deploy full config first, then start with correct config.
+# Демон nginx на узле один и обслуживает все виртуальные хосты сразу, поэтому
+# перезапуск не применяется (при нём порты отпускаются не мгновенно и bind()
+# отказывает): nginx обязан стартовать уже с итоговой конфигурацией.
+#
+# Условие проверяет ИМЕННО первую установку. Прежняя редакция гейта
+# (`nginx_installed.changed`) при переходе на обновления останавливала бы общую
+# службу узла при каждой новой версии в репозитории — то есть роняла бы и
+# соседний проект, причём остановка была бы не следствием обновления, а нашим
+# собственным действием поверх него. Симметричная правка сделана и в роли nginx:
+# исправление в одном месте оставило бы дефект на upstream-узлах.
+- name: "Остановить новый nginx до подготовки конфигурации"
+  ansible.builtin.systemd:
+    name: nginx
+    state: stopped
+  when:
+    - nginx_installed.changed
+    - not _nginx_present_before.stat.exists
+
+- name: "Создать каталог stream.d nginx на upstream"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: "Создать каталог фрагментов карты SNI на upstream"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/sni-map.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Точка расширения ВНУТРИ блока, слушающего порт 443: соседний проект кладёт сюда
+# директивы, которым нужно место в самом блоке (например, ограничение числа
+# соединений). Собственного блока на этом порту у соседа быть не может — порт один.
+- name: "Создать каталог расширений маршрутизатора для соседних проектов на upstream"
+  ansible.builtin.file:
+    path: /etc/nginx/stream.d/router.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Точка расширения уровня http{}: виртуальные хосты соседних проектов.
+# Каталог создаётся независимо от того, кладёт ли в него файлы сам ai-proxy:
+# его существование и есть предоставляемый контракт узла.
+- name: "Создать каталог HTTP-фрагментов nginx на upstream"
+  ansible.builtin.file:
+    path: /etc/nginx/conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Блок stream{} в nginx.conf с включением всего stream.d: единый маркер, чтобы
+# повторное развёртывание правило собственную запись, а не добавляло вторую.
+# Строка включения одна на каталог — сюда же попадают потоковые блоки соседей.
+- name: "Добавить блок stream в nginx.conf на upstream"
+  ansible.builtin.blockinfile:
+    path: /etc/nginx/nginx.conf
+    marker: "# {mark} ANSIBLE MANAGED - nginx stream block"
+    insertafter: EOF
+    block: |
+      stream {
+          include /etc/nginx/stream.d/*.conf;
+      }
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+
+# Включение conf.d на уровне http{}: в пакете Debian оно есть по умолчанию, но
+# умолчание дистрибутива контрактом не является. Читаем nginx.conf, чтобы добавить
+# строку только при её отсутствии: вторая строка включения того же каталога дала бы
+# двойное объявление upstream и отказ конфигурации.
+- name: "Прочитать nginx.conf для проверки подключения HTTP-фрагментов на upstream"
+  ansible.builtin.slurp:
+    src: /etc/nginx/nginx.conf
+  register: _nginx_conf_raw
+
+- name: "Подключить conf.d к блоку http nginx на upstream"
+  ansible.builtin.blockinfile:
+    path: /etc/nginx/nginx.conf
+    marker: "    # {mark} ANSIBLE MANAGED - nginx http conf.d include"
+    insertafter: '^\s*http\s*\{'
+    block: "    include /etc/nginx/conf.d/*.conf;"
+  when:
+    # Вставка идёт внутрь http{}; без него blockinfile положил бы строку включения
+    # на верхний уровень файла, где директива недопустима.
+    - _nginx_conf_raw.content | b64decode is search('(?m)^\s*http\s*\{')
+    # Закомментированная строка включения контрактом не является, поэтому
+    # признак — начало строки без символа комментария.
+    - not (_nginx_conf_raw.content | b64decode is search('(?m)^\s*include\s+/etc/nginx/conf\.d/\*\.conf'))
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+
+# Маршрутизатор SNI принадлежит ai-proxy как владельцу nginx на узле и
+# разворачивается безусловно: его редакция — единственная действующая.
+# Расширяют его соседи не правкой файла, а своими фрагментами в sni-map.d.
+- name: "Разместить зону ограничения транзитных сессий ai-proxy на upstream"
+  ansible.builtin.template:
+    src: '{{ playbook_dir }}/templates/10-aiproxy-capacity.conf.j2'
+    dest: /etc/nginx/stream.d/10-aiproxy-capacity.conf
+    mode: '0644'
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+
+- name: "Разместить общий маршрутизатор SNI на upstream"
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/templates/00-sni-router.conf.j2"
+    dest: /etc/nginx/stream.d/00-sni-router.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+
+- name: "Ограничить число рабочих процессов общего nginx бюджетом памяти"
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: '^worker_processes'
+    line: "worker_processes {{ proxy_nginx_workers | default(1) }};"
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+
+- name: "Настроить worker_connections общего nginx"
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: '^\s*worker_connections'
+    line: "\tworker_connections {{ nginx_worker_connections | default(4096) }};"
+    insertafter: '^\s*events\s*\{'
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+
+# Предел дескрипторов рабочего процесса: соединение занимает два (клиентское
+# и к цели), плюс запас на файлы и сокеты службы. Без него предел процесса
+# остаётся системным и обрывает приём раньше, чем исчерпаются соединения.
+- name: "Настроить worker_rlimit_nofile общего nginx"
+  ansible.builtin.lineinfile:
+    path: /etc/nginx/nginx.conf
+    regexp: '^\s*worker_rlimit_nofile'
+    line: "worker_rlimit_nofile {{ nginx_worker_rlimit_nofile | default(fd_limit | default(65535)) }};"
+    insertbefore: '^\s*events\s*\{'
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+
+
+- name: "Отметить подготовку upstream-маршрутизатора"
+  ansible.builtin.set_fact:
+    _aiproxy_upstream_router_prepared: true

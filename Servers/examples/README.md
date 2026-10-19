@@ -16,10 +16,13 @@
 - На каждом узле условно 961 МиБ RAM и 2 CPU, без соседних приложений.
 - HTTPS-прокси `proxy.example.com:443`, TLS 1.2/1.3 для клиентов;
   межузловой Squid TLS с проверкой сертификата `transit.internal`.
-- HTTP-01 через оба access с общим DNS-именем, собственным сертификатом
+- Публичный DoH `https://dns.example.com/q` на обоих access, TLS 1.2/1.3 и HTTP/2.
+- Access → upstream только DoH через SNI :443, TLS 1.3 без проверки сертификата;
+  постоянные HTTP/2-соединения с idle timeout 300 с, dnsproxy на loopback.
+- HTTP-01 обоих HTTPS-имён через оба access с собственным сертификатом
   и ключом у каждого узла, поиском отсутствующего токена у соседа.
 - MTProxy с fake-TLS SNI `max.ru`; межузловой relay использует TLS 1.3.
-- CrowdSec, локальный Unbound, healthcheck и автоматические обновления
+- CrowdSec, локальный Unbound, dnsproxy на access, healthcheck и автоматические обновления
   безопасности; Keepalived включён для демонстрации необязательного VRRP.
 
 Это отдельный показательный сценарий. HTTPS и межузловой TLS по-прежнему
@@ -34,6 +37,10 @@
 пути к ним в конфигах соответствуют путям деплоймента. Публичные адреса DNS и
 домен маскировки `max.ru` — настройки служб, а не реквизиты рабочего inventory.
 
+Staged конфиги и unit также показаны: перед переключением они отделены от
+активных файлов. Файлы подтверждённых digests — изменяемое состояние сервера,
+поэтому в примеры не входят.
+
 ## Состав
 
 [access/](access/) соответствует `access-01`, [upstream/](upstream/) —
@@ -47,6 +54,9 @@ access адрес соседа будет `203.0.113.1:80` вместо `203.0.1
 
 | Группа файлов | Содержание и условия применения |
 |---|---|
+| `aiproxy/dnsproxy.yml`, `systemd/system/aiproxy-doh.service` | Локальный DoH-транспорт access, pinned binary и предел памяти |
+| `nginx/stream.d/12-aiproxy-doh.conf`, `sni-map.d/aiproxy-doh.conf` | Публичный TLS/HTTP2 DoH access |
+| `nginx/conf.d/aiproxy-dns-doh-acme.conf` | HTTP-01 отдельного DoH-имени через оба IP |
 | `squid.conf` | Клиентская аутентификация и parent pool на access; анонимный транспорт на upstream; loopback manager 3129, keepalive, текущие таймауты и пределы памяти |
 | `nginx/nginx.conf` | Самостоятельный пример базового файла с модулем stream, worker/FD-пределами и подключением `conf.d`/`stream.d` |
 | `nginx/stream.d/00-sni-router.conf` | Общий публичный 443, SNI routing, PROXY protocol, fallback на Squid 3128 |
@@ -62,7 +72,7 @@ access адрес соседа будет `203.0.113.1:80` вместо `203.0.1
 | `mtproxy/mtg.toml`, `mtproxy/users.txt` | Upstream: параметры mtg, предел сессий и демонстрационный административный реестр; реестр не создаёт отдельных секретов пользователей |
 | `crowdsec/` | Источники журналов, whitelist узлов и локальное ограничение SQLite; штатного обнаружения перебора Squid по 407 нет |
 | `systemd/system/` | Общий `aiproxy.slice`, индивидуальные ограничения служб, mtg, healthcheck и таймер, интеграция общих портов |
-| `resources.json` | Расчёт памяти: 380 МиБ на access с VRRP, 400 МиБ на upstream; минимумы служб выше RAM/3, предел 1 ГБ и резерв ОС соблюдены |
+| `resources.json` | Расчёт памяти: 412 МиБ на access с VRRP, 400 МиБ на upstream; минимумы служб выше RAM/3, предел 1 ГБ и резерв ОС соблюдены |
 | `usr/local/sbin/` | Проверка Squid с cooldown, применение контракта общих портов и синхронизация CrowdSec Hub по сроку/дрейфу с подтверждением применения |
 | `keepalived.conf`, `keepalived/check_and_restart_squid.sh` | Необязательный VRRP; его проверка использует тот же healthcheck, что и таймер |
 | `nftables.conf`, `shared-host/matrix-ports.nft` | Вариант upstream с nftables; файл Matrix изначально содержит `return`, соседний проект дополняет его сам |

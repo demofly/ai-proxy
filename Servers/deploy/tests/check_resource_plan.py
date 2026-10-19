@@ -31,7 +31,7 @@ def main():
     cases = [
         ('access900', True, dict(proxy_role='access', ansible_memtotal_mb=900)),
         ('upstream900', True, dict(ansible_memtotal_mb=900)),
-        ('access961', True, dict(proxy_role='access', ansible_memtotal_mb=961, expected_budget_mb=368)),
+        ('access961', True, dict(proxy_role='access', ansible_memtotal_mb=961, expected_budget_mb=400)),
         ('upstream961', True, dict(ansible_memtotal_mb=961, expected_budget_mb=400)),
         ('access1967', True, dict(proxy_role='access', ansible_memtotal_mb=1967, expected_budget_mb=655)),
         ('upstream512', False, dict(ansible_memtotal_mb=512)),

@@ -1,7 +1,7 @@
 {
     "budget": {
-        "bytes": 398458880,
-        "mb": 380,
+        "bytes": 432013312,
+        "mb": 412,
         "target_bytes": 335893845
     },
     "plan": {
@@ -9,6 +9,7 @@
         "limits": {
             "crowdsec": 192,
             "crowdsec_bouncer": 24,
+            "doh": 32,
             "haveged": 8,
             "health": 8,
             "keepalived": 12,
@@ -17,8 +18,8 @@
             "squid": 64,
             "unbound": 24
         },
-        "minimum_mb": 380,
-        "total_mb": 380
+        "minimum_mb": 412,
+        "total_mb": 412
     },
     "ram_mb": 961,
     "system_reserved_mb": 241,
@@ -38,6 +39,10 @@
         {
             "memory_mb": "8",
             "name": "aiproxy-health.service"
+        },
+        {
+            "memory_mb": "32",
+            "name": "aiproxy-doh.service"
         },
         {
             "memory_mb": "48",

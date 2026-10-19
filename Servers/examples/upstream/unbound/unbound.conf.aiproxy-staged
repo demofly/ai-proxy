@@ -1,0 +1,127 @@
+# Ansible managed
+# Unbound caching DNS resolver — upstream node
+#
+# Роль upstream:
+#   Принимает DoH от access; обращается к dns_servers по обычному DNS
+
+server:
+    # Plain DNS never listens on a public interface, including during migration.
+    interface: 127.0.0.1
+    port: 53
+    interface: 127.0.0.1@8443
+    https-port: 8443
+    tls-service-key: "/etc/unbound/tls/doh.key"
+    tls-service-pem: "/etc/unbound/tls/doh.pem"
+    http-endpoint: "/q"
+    http-max-streams: 16
+    http-query-buffer-size: 256k
+    http-response-buffer-size: 256k
+    incoming-num-tcp: 16
+    # Transit HTTP/2 connections persist for five idle minutes, matching dnsproxy.
+    # Public client connections keep a shorter resource bound.
+    tcp-idle-timeout: 300000
+
+    # Доступ: localhost всегда, access-ноды — только на upstream.
+    # Список клиентов общий с правилами firewall (dns_allowed_clients),
+    # чтобы прикладной и сетевой уровни не расходились.
+    # Совпадение — по самому длинному префиксу, поэтому /32-разрешения
+    # и /8 для localhost сильнее запрета 0.0.0.0/0 ниже.
+    access-control: 127.0.0.0/8 allow
+    access-control: 203.0.113.1/32 allow
+    access-control: 203.0.113.2/32 allow
+    # deny, а не refuse: запрос отбрасывается без ответа. REFUSED — это ответ,
+    # то есть отклик сканеру и плечо для отражённого трафика.
+    access-control: 0.0.0.0/0 deny
+    access-control: ::/0 deny
+
+    # Производительность: потоки по числу ядер
+    num-threads: 1
+
+    # Cache capacities leave room for malloc overhead, sockets and resolver state.
+    msg-cache-size: 1m
+    rrset-cache-size: 2m
+    key-cache-size: 1m
+
+    # Сегменты кеша. Unbound принимает здесь только степень двойки и при ином
+    # значении округляет сам, сообщая об этом в журнале. Округляем в вычислении:
+    # при 3, 6, 12 ядрах прежнее значение степенью двойки не было, и в журнал шло
+    # сообщение, неотличимое по виду от неисправности.
+    # Округление — вниз до ближайшей степени двойки (2^floor(log2 n)), не меньше 1:
+    # сегментов больше числа потоков не нужно, они лишь дробят память.
+    msg-cache-slabs: 1
+    rrset-cache-slabs: 1
+    key-cache-slabs: 1
+    infra-cache-slabs: 1
+
+    # Срок хранения записи в кеше берётся из самой зоны: проект не задаёт
+    # ни нижнего, ни верхнего предела.
+    #
+    # Нижнего предела нет по умолчанию самого unbound (cache-min-ttl = 0,
+    # cache-min-negative-ttl = 0), поэтому обе директивы здесь просто
+    # отсутствуют — короткий срок зоны не удлиняется.
+    #
+    # А вот потолки продолжают действовать молча и БЕЗ записи в файле:
+    # умолчания unbound равны 86400 с для положительных ответов и 3600 с
+    # для отрицательных. Удалить строки недостаточно — умолчания усекали бы
+    # сверху срок, объявленный зоной. Потому потолки сняты явным
+    # значением 2147483647 (предел знакового 32-разрядного счётчика секунд):
+    # большие числа стоят здесь не как «желаемый срок», а как отключение
+    # усечения — действительный срок по-прежнему диктует зона.
+    cache-max-ttl: 2147483647
+    cache-max-negative-ttl: 2147483647
+
+    # serve-expired / serve-expired-ttl намеренно отсутствуют (умолчание
+    # unbound — выключено). serve-expired выдаёт клиенту запись ПОСЛЕ
+    # истечения объявленного зоной срока, что прямо противоречит политике
+    # выше, причём по умолчанию срабатывает уже при 1,8 с задержки ответа,
+    # а не только при отказе вышестоящего резолвера. Удалять их следует
+    # ПАРОЙ: без serve-expired-ttl окно выдачи просроченной записи
+    # расширяется до умолчания 86400 с. Понадобится аварийная выдача —
+    # заводится отдельный явный выключатель в defaults роли, а не молчаливое
+    # умолчание, и решение это архитектурное (доступность против строгости
+    # срока), а не настроечное.
+
+    # Prefetch: популярная запись обновляется в фоне в последние 10 % своего
+    # срока. Срок, отдаваемый клиенту, при этом не удлиняется — клиент всегда
+    # получает запись внутри срока зоны, — а фоновое обновление гасит прирост
+    # числа запросов к вышестоящим резолверам от снятого нижнего предела.
+    prefetch: yes
+    # prefetch-key — упреждающая выборка ключей DNSSEC, поэтому привязана
+    # к включённой валидации DNSSEC, а не к prefetch записей: без валидации
+    # ключи не запрашиваются вовсе и выбирать нечего.
+    prefetch-key: yes
+
+    # Безопасность
+    hide-identity: yes
+    hide-version: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    # harden-referral-path вызывает ложные SERVFAIL в forwarding mode
+    # (unbound не может проверить referral path через forwarder)
+    harden-referral-path: no
+    use-caps-for-id: yes
+
+    # DNSSEC (root.key в /var/lib/unbound/ — writable для unbound)
+    auto-trust-anchor-file: "/var/lib/unbound/root.key"
+
+    # Оптимизации
+    so-reuseport: yes
+    so-rcvbuf: 256k
+    so-sndbuf: 256k
+    edns-buffer-size: 1232
+    minimal-responses: yes
+
+    # Логирование: только ошибки
+    verbosity: 1
+    logfile: ""
+    use-syslog: yes
+    log-queries: no
+    log-replies: no
+
+# Форвардинг — все запросы через upstream DNS
+forward-zone:
+    name: "."
+    # Публичные DNS-резолверы из dns_servers (plain DNS, порт 53)
+    forward-addr: 9.9.9.9
+    forward-addr: 8.8.8.8
+    forward-addr: 1.1.1.1

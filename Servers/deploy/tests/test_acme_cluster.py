@@ -81,6 +81,7 @@ class NativeAcmeClusterTests(unittest.TestCase):
         values = {'https_proxy_enabled': True, 'https_proxy_acme_enabled': True,
                   'https_proxy_hostname': 'proxy.example.test',
                   'https_proxy_acme_email': 'admin@example.test',
+                  'dns_doh_enabled': True, 'dns_doh_hostname': 'dns.example.test',
                   'enable_auth': True, 'proxy_role': 'access'}
         inventory = {'all': {'children': {'access_proxies': {'hosts': hosts, 'vars': values}}}}
         (tmp / 'inventory.yml').write_text(yaml.safe_dump(inventory))
@@ -92,6 +93,13 @@ class NativeAcmeClusterTests(unittest.TestCase):
         tasks.append({'ansible.builtin.template': {
             'src': str(ROOT / 'roles/nginx/templates/aiproxy-https-acme.conf.j2'),
             'dest': str(tmp / '{{ inventory_hostname }}/site.conf')}})
+        tasks += [{'ansible.builtin.set_fact': {'_dns_doh_acme_cluster':
+                   "{{ groups.access_proxies | https_proxy_acme_cluster(hostvars, inventory_hostname, 'dns_doh') }}"}},
+                  {'ansible.builtin.template': {
+                      'src': str(ROOT / 'roles/nginx/templates/aiproxy-https-acme.conf.j2'),
+                      'dest': str(tmp / '{{ inventory_hostname }}/dns-site.conf')},
+                   'vars': {'_acme_site_id': 'dns-doh', 'https_proxy_hostname': '{{ dns_doh_hostname }}',
+                            '_https_proxy_acme_cluster': '{{ _dns_doh_acme_cluster }}'}}]
         play = [{'hosts': 'access_proxies', 'gather_facts': False, 'strategy': 'linear',
                  'tasks': tasks}]
         (tmp / 'render.yml').write_text(yaml.safe_dump(play, allow_unicode=True), encoding='utf-8')
@@ -102,7 +110,8 @@ class NativeAcmeClusterTests(unittest.TestCase):
             raise AssertionError(result.stdout + result.stderr)
         for name, address in cls.addresses.items():
             directory = tmp / name
-            site = (directory / 'site.conf').read_text().replace(
+            site = ((directory / 'site.conf').read_text() + '\n' +
+                    (directory / 'dns-site.conf').read_text()).replace(
                 'listen 80;', f'listen {address}:{cls.port};').replace('    listen [::]:80;\n', '')
             for peer in cls.addresses.values():
                 site = site.replace(peer + ':80;', peer + ':' + str(cls.port) + ';')
@@ -146,11 +155,11 @@ class NativeAcmeClusterTests(unittest.TestCase):
     def token(cls, owner, name):
         return cls.tmp / owner / 'www/.well-known/acme-challenge' / name
 
-    def request(self, node, token, method='GET', headers=None):
+    def request(self, node, token, method='GET', headers=None, hostname='proxy.example.test'):
         connection = http.client.HTTPConnection(self.addresses[node], self.port, timeout=3)
         try:
             connection.request(method, '/.well-known/acme-challenge/' + token,
-                               headers={'Host': 'proxy.example.test', **(headers or {})})
+                               headers={'Host': hostname, **(headers or {})})
             response = connection.getresponse()
             return response.status, response.read(), response.getheader('Cache-Control')
         finally:
@@ -164,6 +173,15 @@ class NativeAcmeClusterTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertEqual(body, b'account-one-authorization' if token == 'alpha' else b'account-two-authorization')
             self.assertEqual(cache, 'no-store')
+
+    def test_both_hostnames_authorize_concurrently_through_both_ips(self):
+        cases = [(hostname, node, token) for hostname in ('proxy.example.test', 'dns.example.test')
+                 for node in self.addresses for token in ('alpha', 'beta')]
+        with ThreadPoolExecutor(max_workers=8) as workers:
+            results = list(workers.map(lambda case: self.request(case[1], case[2], hostname=case[0]), cases))
+        self.assertTrue(all(result[0] == 200 for result in results), results)
+        for node in self.addresses:
+            self.assertEqual(self.request(node, 'missing', hostname='dns.example.test')[0], 404)
 
     def test_missing_token_terminates_without_a_forwarding_loop(self):
         for node in self.addresses:

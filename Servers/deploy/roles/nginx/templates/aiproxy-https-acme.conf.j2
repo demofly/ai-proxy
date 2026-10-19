@@ -1,8 +1,9 @@
 # {{ ansible_managed }}
 # Named ACME vhost; default HTTP sites remain owned by their projects.
+{% set acme_pool = 'aiproxy_acme_peers' if _acme_site_id | default('https') == 'https' else 'aiproxy_' ~ (_acme_site_id | replace('-', '_')) ~ '_acme_peers' %}
 {% set peers = _https_proxy_acme_cluster.peers | default([]) %}
 {% if peers %}
-upstream aiproxy_acme_peers {
+upstream {{ acme_pool }} {
 {% for peer in peers %}
     server {{ peer.endpoint }};
 {% endfor %}
@@ -25,7 +26,7 @@ server {
     location @aiproxy_acme_peer {
         # A peer may serve its own token, but may never forward the miss again.
         if ($http_x_aiproxy_acme_hop != "") { return 404; }
-        proxy_pass http://aiproxy_acme_peers;
+        proxy_pass http://{{ acme_pool }};
         proxy_set_header Host {{ https_proxy_hostname }};
         proxy_set_header X-AIProxy-ACME-Hop 1;
         proxy_set_header Authorization "";

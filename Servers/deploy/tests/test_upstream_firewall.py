@@ -61,7 +61,7 @@ class FirewallTests(unittest.TestCase):
                           dns_allowed_clients=['198.51.100.10'])
             for version, source in (('iptables','192.0.2.99'), ('ip6tables','2001:db8::99')):
                 rules = ENV.from_string((DEPLOY/f'templates/{version}-upstream.rules.j2').read_text()).render(values)
-                for port in (proxy_port, 443, 53):
+                for port in (proxy_port, 443, 53, 8443):
                     self.assertEqual(verdict(rules, source, port), 'DROP', (version, port))
                 self.assertEqual(verdict(rules, source, 53, 'udp'), 'DROP')
                 self.assertEqual(verdict(rules, source, 22), 'RETURN')
@@ -69,10 +69,13 @@ class FirewallTests(unittest.TestCase):
                 if version == 'iptables':
                     self.assertEqual(verdict(rules, '198.51.100.10', proxy_port), 'ACCEPT')
                     self.assertEqual(verdict(rules, '198.51.100.10', 443), 'ACCEPT')
+                    self.assertEqual(verdict(rules, '198.51.100.10', 8443), 'DROP')
+                    self.assertEqual(verdict(rules, '198.51.100.10', 53), 'DROP')
+                    self.assertEqual(verdict(rules, '198.51.100.10', 53, 'udp'), 'DROP')
 
     @unittest.skipUnless(os.name == 'posix', 'requires bash')
     def test_failed_restore_cannot_be_hidden_by_a_successful_followup(self):
-        play = yaml.safe_load((DEPLOY/'playbook.yml').read_text())[0]
+        play = {'tasks': yaml.safe_load((DEPLOY/'tasks/upstream-firewall.yml').read_text())}
         block = next(t['block'] for t in play['tasks'] if t.get('name') == 'Настроить отдельную цепочку iptables на upstream')
         task = next(t for t in block if t.get('name') == 'Атомарно применить отдельную цепочку с сохранением чужих правил')
         with tempfile.TemporaryDirectory(prefix='aiproxy-firewall-') as temp:

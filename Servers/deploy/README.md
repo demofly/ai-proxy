@@ -164,9 +164,9 @@ deployment. Boot-unit восстанавливает обе семьи до ст
 
 Ubuntu после чистой установки попадает в третью строку: ufw установлен, но не
 активирован. Все три бэкенда закрывают один и тот же набор портов upstream-ноды
-(Squid, MTProxy 443, DNS 53/tcp+udp) — доступ только с IP access-нод.
-Результат проверяется на самой ноде задачей `Assert DNS (53/tcp+udp) is restricted
-to access proxies`: она читает действующие правила ядра, а не шаблон.
+(Squid, MTProxy и DoH на общем 443/tcp) — доступ только с IP access-нод.
+Результат проверяется на самой ноде задачей ограничения DoH на общем `443/tcp`
+Читаются действующие правила ядра; отдельно выполняются DoH-запросы с access.
 
 ## Бюджет памяти узла
 
@@ -180,7 +180,7 @@ to access proxies`: она читает действующие правила я
 
 | RAM узла | Access без VRRP | Upstream с MTProxy |
 |---|---|---|
-| 900 / 961 МиБ | 368 МиБ | 400 МиБ |
+| 900 / 961 МиБ | 400 МиБ | 400 МиБ |
 | 1200 МиБ | 400 МиБ | 400 МиБ |
 | 1536 МиБ | 512 МиБ | 512 МиБ |
 | 1967 МиБ | 655 МиБ | 655 МиБ |
@@ -201,6 +201,7 @@ haveged, проверка здоровья и Keepalived при его вклю�
 |---|---|
 | Squid | 64 |
 | Unbound | 24 |
+| dnsproxy (access) | 32 |
 | nginx | 48 |
 | mtg | 32 |
 | CrowdSec | 192 |
@@ -209,7 +210,7 @@ haveged, проверка здоровья и Keepalived при его вклю�
 | Keepalived, если включён | 12 |
 
 Полный upstream с MTProxy и CrowdSec требует 400 МиБ бюджета. Access без VRRP
-требует 368 МиБ, с VRRP — 380 МиБ. К ним добавляются резервы ОС и соседей для
+требует 400 МиБ, с VRRP — 412 МиБ. К ним добавляются резервы ОС и соседей для
 проверки физической RAM. Это минимумы планирования для ограниченной нагрузки;
 работоспособность конкретного рабочего трафика требует проверки на узле.
 
@@ -597,7 +598,11 @@ htpasswd -B -C 12 -bn пользователь пароль >> passwd
 
 | Переменная | Назначение | Умолчание |
 |---|---|---|
-| `dns_resolver_port` | Порт, на котором слушает резолвер узла | 53 |
+| `dns_resolver_port` | Локальный DNS Unbound для Squid и системы | 53 |
+| `dns_doh_backend_port` | Внутренний TLS backend Unbound за SNI relay | 8443 |
+| `dns_doh_relay_port` / `dns_doh_sni` | Снятие PROXY и отдельный SNI на общем 443 | 4447 / dns.transit.internal |
+| `dns_doh_enabled` | Публичный DoH access `/q`, с автоматическим ACME | false |
+| `dns_doh_hostname` / `dns_doh_acme_email` | Отдельное имя и контакт выпуска сертификата | задаются при включении |
 | `dns_resolver_threads` | Число рабочих потоков резолвера | по числу ядер узла |
 | `dns_resolver_cache_mb` | Объём кеша резолвера | доля предела памяти службы |
 | `dns_resolver_prefetch` | Обновлять популярные записи до истечения их срока | true |
@@ -644,96 +649,121 @@ Playbook выполняет фазы в строгом порядке:
 8. **Keepalived** — VRRP failover (access)
 9. **CrowdSec** — IPS с infrastructure whitelist
 
-## DNS Resolver (unbound)
+## DNS: Unbound и DoH
 
-Каждая нода получает локальный кеширующий DNS-резолвер (unbound) с различной архитектурой в зависимости от роли:
+```text
+Squid / ОС → access Unbound 127.0.0.1:53
+                  ↓ DNS только по loopback
+             dnsproxy 127.0.0.1:5353
+                  ↓ HTTPS HTTP/2, проверка сертификата отключена
+             upstream nginx :443 (SNI dns.transit.internal)
+                  ↓ relay 127.0.0.1:4447, снятие PROXY-заголовка
+             Unbound TLS 127.0.0.1:8443/q → dns_servers:53
 
-```
-                    ┌──────────────────┐
-                    │  Публичные DNS   │
-                    │  (plain DNS)     │
-                    │ 9.9.9.9          │
-                    │ 8.8.8.8          │
-                    │ 1.1.1.1          │
-                    └────────▲─────────┘
-                             │
-              ┌──────────────┴──────────────┐
-              │    upstream nodes            │
-              │    unbound (127.0.0.1:53     │
-              │           + ansible_host:53) │
-              └──────────────▲──────────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         │                   │                   │
-┌────────┴────────┐ ┌────────┴────────┐         ...
-│  access-01      │ │  access-02      │
-│  unbound        │ │  unbound        │
-│  (127.0.0.1:53) │ │  (127.0.0.1:53) │
-│  → upstream DNS │ │  → upstream DNS │
-└─────────────────┘ └─────────────────┘
+Любой DoH-клиент → https://dns.example.com/q :443
+                  ↓ SNI → nginx TLS 127.0.0.1:4446
+                  ↓ HTTP/2 без TLS, только loopback
+             access Unbound 127.0.0.1:5443 → та же цепочка upstream
 ```
 
-**Ключевые характеристики:**
-- **upstream** → plain DNS к публичным резолверам (9.9.9.9, 8.8.8.8, 1.1.1.1)
-- **access** → forward **только** на unbound upstream-нод (никакого прямого доступа к публичным DNS)
-- Squid на всех нодах использует `dns_nameservers 127.0.0.1` (локальный unbound)
-- Автотюнинг: потоки = CPU, кеш = RAM/32 (мин 16 МБ), DNSSEC, prefetch
-- `serve-expired: yes` — отдаёт устаревшие записи при недоступности upstream (30 сек)
-- `cache-max-negative-ttl: 10` — быстрое восстановление после DNS-ошибок
-- systemd-resolved отключается, `/etc/resolv.conf` → 127.0.0.1
+На обоих уровнях обычный UDP/TCP DNS слушает только `127.0.0.1:53`.
+Межсерверный DoH идёт через общий внешний `proxy_port` (443), доступный только
+access и `dns_extra_clients`. Отдельный SNI направляет TLS через loopback relay
+4447 в Unbound 8443; relay снимает PROXY-заголовок и проверяет ACL клиентов.
+Порт 8443 за nginx наружу не открыт. DNS stamps фиксируют IP и SNI без DNS bootstrap. Публичный DoH
+на access открыт всем, без авторизации и списка разрешённых клиентов; путь `/q`
+поддерживает GET и POST в wire format RFC 8484 через HTTP/2.
 
-### Ограничение доступа к резолверу upstream
+Access обращается к upstream исключительно по DoH. В dnsproxy заданы DNS stamps со статическими
+IP и SNI, `insecure: true`, пустые bootstrap/fallback; открытого резервного
+DNS-тракта нет. Каждый запрос направляется upstream параллельно, используется
+первый успешный ответ. Таймаут — 4 секунды, число обработчиков ограничено 64.
+Проверка сертификата отключена намеренно по требованию владельца: шифрование
+сохраняется, удостоверение личности upstream не выполняется. DNSSEC в Unbound
+остаётся отдельной проверкой подписанных зон.
 
-Резолвер upstream слушает внешний адрес (`ansible_host:53`), поэтому доступ к нему
-ограничен на двух уровнях — сетевом и прикладном:
+Между access и upstream используются постоянные HTTP/2-соединения поверх
+**TLS 1.3**. Пул транспорта dnsproxy v0.86.0 повторно использует соединения и
+закрывает их через 300 секунд без DNS-запросов; это отличается от таймаута
+отдельного запроса (4 с). `tcp-idle-timeout` upstream Unbound также равен
+300000 мс. После простоя следующий запрос создаёт новое TLS-соединение;
+активный поток запросов не обрывается по возрасту соединения.
 
-| Уровень | Механизм | Что делает с чужим запросом |
-|---|---|---|
-| Сеть | UFW / nftables / iptables: 53/tcp и 53/udp только с IP из `dns_allowed_clients` | пакет отбрасывается (DROP) |
-| Приложение | `access-control` в `unbound.conf`: `/32 allow` на клиента, `0.0.0.0/0 deny` | запрос отбрасывается без ответа |
+В Unbound 1.19 нет директивы `tls-protocols`: TLS 1.3 задаётся через отдельный
+`/etc/unbound/openssl-doh.cnf` и переменную `OPENSSL_CONF` только для upstream
+unbound.service. Общая политика OpenSSL узла и клиентский TLS публичного DoH
+не меняются. Нативная проверка отклоняет TLS 1.2 и принимает TLS 1.3.
+`tests/check_doh_idle.py` наблюдает реальное соединение более пяти минут,
+проверяет сохранение до таймаута и новое соединение после него.
+Реализация пула: [dnsproxy v0.86.0](https://github.com/AdguardTeam/dnsproxy/blob/v0.86.0/upstream/doh.go);
+политика службы: [OpenSSL SSL configuration](https://docs.openssl.org/3.0/man5/config/#ssl-configuration).
 
-Список клиентов — `dns_allowed_clients`: IP группы `access_proxies` плюс
-необязательное расширение `dns_extra_clients`. Величина вычисляется один раз в
-`playbook.yml` и потребляется всеми точками ограничения, чтобы правило не
-разошлось между бэкендами. `deny` вместо `refuse` выбран намеренно: REFUSED —
-это ответ, то есть отклик сканеру и плечо для отражённого трафика.
+Кеши Unbound следуют TTL зоны, `serve-expired` выключен. Транспорт dnsproxy
+собственного кеша не ведёт. Минимумы памяти: Unbound 24 МиБ, dnsproxy 32 МиБ
+только на access; транспорт входит в общий план и cgroup проекта. Потоки и кеши
+Unbound рассчитываются из его лимита памяти. Подробные параметры с комментариями
+приведены в [inventory.yml.sample](inventory.yml.sample).
 
-**Управление:**
+Для публичного DoH задайте в `access_proxies.vars`:
+
+```yaml
+dns_doh_enabled: true
+dns_doh_hostname: dns.example.com
+dns_doh_acme_email: admin@example.com
+```
+
+Все A/AAAA имени должны вести на подготовленные access с доступными портами
+80/443. Certbot выпускает отдельный сертификат и ключ на каждом access; HTTP-01
+имеет локальный приоритет, при отсутствии токена обращается к соседу за один
+переход. HTTP-сайты HTTPS-прокси и DoH имеют разные имена upstream и сосуществуют.
+`certbot.timer` продлевает оба сертификата, deploy hook проверяет и перечитывает
+nginx. TLS для публичных клиентов — 1.2/1.3, ALPN — `h2`.
+
+Первый переход на DoH выполняйте **полным прогоном всех узлов**:
 
 ```bash
-# Развернуть только DNS
-ansible-playbook -i inventory.yml playbook.yml -t dns
-
-# Проверить статус
-ssh root@<host> 'systemctl status unbound'
-
-# Проверить резолвинг
-ssh root@<host> 'dig @127.0.0.1 google.com'
-
-# Журнал резолвера (статистика через unbound-control недоступна:
-# удалённое управление в конфигурации не включено — разрыв GAP-105)
-ssh root@<host> 'journalctl -u unbound -n 50'
+ansible-playbook -i inventory.yml playbook.yml -e service_upgrades_enabled=false
 ```
 
-**Проверка ограничения (эмпирическая):**
+Сначала устанавливаются бинарники и готовятся отдельные staged конфиги,
+SNI router upstream и firewall. Затем активируется и проверяется DoH upstream,
+после него переключается access; только затем запускается Certbot. Системный `/etc/resolv.conf` переключается после успешного
+DNS-запроса. Применённый digest фиксируется после проверки: прерванный прогон
+не оставит конфигурацию на диске не применённой при повторном запуске.
+Конфиги Unbound, dnsproxy и unit транспорта сначала записываются отдельно
+от активных. Клиентский транспорт переключается после готовности upstream;
+его фактическая работа проверяется запросом прямо на 5353, отдельно от кеша
+Unbound. Для Unbound, транспорта и nginx хранятся подтверждения применённой
+версии: при обрыве после записи файлов повторный прогон всё равно применит
+изменения. Подтверждение nginx записывается только после корректного DoH-ответа.
+
+Для применения изменений используйте полный прогон всех узлов. Отдельные
+`--limit upstreams` или `-t dns` не выполняют весь межролевой порядок:
+это пропустит подготовку зависимостей либо оставит access без старого DNS.
+
+Готовность проверяется по локальным адресам и реальными DoH-запросами с access
+к каждому upstream. Самопроверка по `ansible_host:53` удалена: у узла за NAT
+этот адрес может отсутствовать на интерфейсах, а NAT hairpin — не поддерживаться.
+После reload выполняется DoH-запрос через локальный публичный SNI-маршрутизатор
+с **проверкой доверия и имени** сертификата access.
 
 ```bash
-# Действующий список клиентов DNS на upstream (бэкенд nftables)
-ssh root@<upstream> 'nft list set inet filter dns_clients'
+# Локальное разрешение и состояние служб access.
+dig @127.0.0.1 example.com
+systemctl status unbound aiproxy-doh
+journalctl -u unbound -u aiproxy-doh -n 50
 
-# ... и счётчики отбитых чужих запросов
-ssh root@<upstream> 'nft list chain inet filter input | grep "DNS deny"'
+# Публичный DoH GET; проверка TLS включена.
+curl --http2 --fail 'https://dns.example.com/q?dns=AAABAAABAAAAAAAAB2V4YW1wbGUDY29tAAABAAE' --output /tmp/dns-response.bin
 
-# То же для iptables-бэкенда
-ssh root@<upstream> 'iptables -S SQUID-PROXY | grep 53'
-
-# С access-ноды — резолвинг обязан работать (оба транспорта)
-ssh root@<access> 'dig @<upstream-ip> example.com; dig +tcp @<upstream-ip> example.com'
-
-# С постороннего хоста — обязан не отвечать (timeout, а не REFUSED)
-dig +time=3 +tries=1 @<upstream-ip> example.com
-dig +tcp +time=3 +tries=1 @<upstream-ip> example.com
+# Действующие ограничения upstream.
+iptables -S SQUID-PROXY | grep -E '443|8443|53'
+# Для nftables: nft list chain inet filter input; nft list set inet filter dns_clients.
 ```
+
+Нативные проверки: `tests/test_dns_doh.py` (Unbound, nginx, dnsproxy),
+`tests/test_acme_cluster.py` (два имени и два IP), `tests/check_doh_budget.py`
+(2000 запросов с параллелизмом 32 под реальным `MemoryMax=32M` в тестовой VM).
 
 ## Архитектура: nginx stream routing и Squid
 

@@ -1,0 +1,196 @@
+---
+- name: "Применить подготовленный транспорт DoH на access"
+  ansible.builtin.include_tasks: activate-bridge.yml
+  when: proxy_role == 'access'
+
+- name: "Установить подготовленный конфиг DNS после готовности зависимостей"
+  ansible.builtin.copy:
+    src: /etc/unbound/unbound.conf.aiproxy-staged
+    dest: /etc/unbound/unbound.conf
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'unbound-checkconf %s'
+
+- name: "Сверить подготовленную конфигурацию DNS с последней применённой"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import hashlib, json, pathlib, subprocess
+        config = pathlib.Path('/etc/unbound/unbound.conf').read_bytes()
+        certificate = pathlib.Path('/etc/unbound/tls/doh.pem')
+        if {{ (proxy_role == 'upstream') | ternary('True', 'False') }}:
+            config += certificate.read_bytes()
+            config += pathlib.Path('/etc/unbound/openssl-doh.cnf').read_bytes()
+        digest = hashlib.sha256(config).hexdigest()
+        marker = pathlib.Path('/var/lib/unbound/aiproxy-applied.sha256')
+        state = subprocess.check_output(['systemctl', 'show', 'unbound', '--property=NeedDaemonReload'], text=True)
+        reload = 'NeedDaemonReload=yes' in state
+        print(json.dumps({'digest': digest, 'needs_apply': reload or not marker.exists() or marker.read_text().strip() != digest, 'needs_reload': reload}))
+  register: _dns_activation_probe
+  changed_when: false
+  check_mode: false
+
+- name: "Включить автозапуск и запустить Unbound"
+  ansible.builtin.systemd:
+    name: unbound
+    enabled: true
+    state: "{{ 'restarted' if (_dns_activation_probe.stdout | from_json).needs_apply else 'started' }}"
+    daemon_reload: "{{ (_dns_activation_probe.stdout | from_json).needs_reload }}"
+
+# Обычный DNS доступен только локально. Внешний IP может находиться за NAT:
+# его доступность проверяется DoH-запросами с access, а не hairpin-подключением.
+# Расхождение процесса с конфигурацией — это дрейф состояния, поэтому оно
+# устраняется перезапуском и перепроверяется; отказ выносится только если
+# слушателя нет и после перезапуска.
+- name: "Проверить доступность настроенных слушателей Unbound"
+  block:
+    - name: "Проверить слушатели Unbound"
+      ansible.builtin.wait_for:
+        host: "{{ item }}"
+        port: "{{ dns_resolver_port | default(53) }}"
+        state: started
+        timeout: 15
+      loop: "{{ _dns_listen_addresses }}"
+  rescue:
+    - name: "Перезапустить Unbound при расхождении состояния с конфигурацией"
+      ansible.builtin.systemd:
+        name: unbound
+        state: restarted
+
+    - name: "Повторно проверить слушатели Unbound после перезапуска"
+      ansible.builtin.wait_for:
+        host: "{{ item }}"
+        port: "{{ dns_resolver_port | default(53) }}"
+        state: started
+        timeout: 15
+      loop: "{{ _dns_listen_addresses }}"
+  vars:
+    _dns_listen_addresses: ['127.0.0.1']
+
+- name: "Проверить локальный слушатель HTTP/2 Unbound"
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ dns_doh_backend_port | default(8443) if proxy_role == 'upstream' else dns_doh_local_port | default(5443) }}"
+    timeout: 15
+  when: proxy_role == 'upstream' or dns_doh_enabled | default(false) | bool
+
+- name: "Проверить разрешение DNS через локальный Unbound"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import json, socket, struct, sys
+        query = struct.pack('!6H', 41723, 256, 1, 0, 0, 0) + b'\x07example\x03com\0\0\1\0\1'
+        for port in json.loads(sys.argv[1]):
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as client:
+                client.settimeout(8)
+                client.sendto(query, ('127.0.0.1', int(port)))
+                packet = client.recv(65535)
+            ident, flags, _, answers, _, _ = struct.unpack('!6H', packet[:12])
+            if ident != 41723 or flags & 15 or not answers:
+                raise SystemExit('Локальный DNS или DoH transport не возвращает корректный ответ')
+      - "{{ ([dns_resolver_port | default(53)] + ([dns_doh_bridge_port | default(5353)] if proxy_role == 'access' else [])) | to_json }}"
+  changed_when: false
+  register: _dns_local_query
+  retries: 3
+  delay: 2
+  until: _dns_local_query.rc == 0
+  when: not ansible_check_mode
+
+- name: "Проверить TLS 1.3 DoH через локальный SNI upstream"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "{{ lookup('file', playbook_dir ~ '/scripts/check-doh.py') }}"
+      - "{{ ([{'url': 'https://' ~ (dns_doh_sni | default('dns.transit.internal')) ~ '/q', 'resolve': (dns_doh_sni | default('dns.transit.internal')) ~ ':443:127.0.0.1'}]) | to_json }}"
+  register: _dns_private_response
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: _dns_private_response.rc == 0
+  when: proxy_role == 'upstream' and nginx_on_443 | default(behind_nginx | default(true)) | bool and not ansible_check_mode
+
+- name: "Зафиксировать успешно проверенный частный DoH nginx"
+  ansible.builtin.copy:
+    dest: /etc/nginx/.aiproxy-doh-upstream-applied
+    content: "{{ (_dns_private_nginx_state.stdout | from_json).digest }}\n"
+    mode: '0600'
+  when: proxy_role == 'upstream' and _dns_private_nginx_state is defined and not ansible_check_mode
+
+- name: "Зафиксировать успешно применённую конфигурацию DNS"
+  ansible.builtin.copy:
+    dest: /var/lib/unbound/aiproxy-applied.sha256
+    content: "{{ (_dns_activation_probe.stdout | from_json).digest }}\n"
+    owner: root
+    group: unbound
+    mode: '0644'
+  when: not ansible_check_mode
+
+- name: "Зафиксировать успешно проверенную конфигурацию транспорта DoH"
+  ansible.builtin.copy:
+    dest: /etc/aiproxy/dnsproxy-applied.sha256
+    content: "{{ (_dns_bridge_activation.stdout | from_json).digest }}\n"
+    mode: '0644'
+  when: proxy_role == 'access' and not ansible_check_mode
+
+# Отключаем systemd-resolved если он занимает порт 53
+- name: "Проверить состояние systemd-resolved"
+  ansible.builtin.command: systemctl is-active systemd-resolved
+  register: _resolved_status
+  changed_when: false
+  failed_when: false
+
+- name: "Отключить локальный DNS-слушатель systemd-resolved"
+  when: _resolved_status.stdout == 'active'
+  block:
+    - name: "Создать каталог переопределений systemd-resolved"
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: "Отключить DNSStubListener"
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/no-stub.conf
+        content: |
+          [Resolve]
+          DNSStubListener=no
+        owner: root
+        group: root
+        mode: '0644'
+      register: _stub_disabled
+
+    - name: "Перезапустить systemd-resolved для освобождения порта 53"
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
+      when: _stub_disabled.changed
+
+    - name: "Направить системный DNS на локальный Unbound"
+      ansible.builtin.copy:
+        dest: /etc/resolv.conf
+        content: |
+          # Managed by Ansible (dns_resolver role)
+          nameserver 127.0.0.1
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: "Направить системный DNS на локальный Unbound без systemd-resolved"
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: |
+      # Managed by Ansible (dns_resolver role)
+      nameserver 127.0.0.1
+    owner: root
+    group: root
+    mode: '0644'
+  when: _resolved_status.stdout != 'active'

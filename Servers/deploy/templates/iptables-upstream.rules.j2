@@ -21,21 +21,20 @@
 -A {{ squid_chain }} -i lo -j RETURN
 
 # Squid only from access proxies
-{% for host in groups['access_proxies'] %}
+{% for host in groups['access_proxies'] if ':' not in hostvars[host]['ansible_host'] %}
 -A {{ squid_chain }} -s {{ hostvars[host]['ansible_host'] }} -p tcp --dport {{ proxy_port }} -j ACCEPT
 {% endfor %}
 {% if mtproxy_enabled | default(false) | bool %}
 
 # MTProxy TLS (nginx on 443) from access proxies
-{% for host in groups['access_proxies'] %}
+{% for host in groups['access_proxies'] if ':' not in hostvars[host]['ansible_host'] %}
 -A {{ squid_chain }} -s {{ hostvars[host]['ansible_host'] }} -p tcp --dport 443 -j ACCEPT
 {% endfor %}
 {% endif %}
 
-# DNS (unbound) from access proxies - both transports
-{% for client in dns_allowed_clients | default([]) %}
--A {{ squid_chain }} -s {{ client }} -p tcp --dport 53 -m comment --comment "DNS from access proxy {{ client }}" -j ACCEPT
--A {{ squid_chain }} -s {{ client }} -p udp --dport 53 -m comment --comment "DNS from access proxy {{ client }}" -j ACCEPT
+# DoH from access proxies; no external plain DNS listener.
+{% for client in dns_allowed_clients | default([]) if ':' not in client %}
+-A {{ squid_chain }} -s {{ client }} -p tcp --dport {{ (proxy_port if nginx_on_443 | default(behind_nginx | default(true)) | bool else dns_doh_backend_port | default(8443)) | int }} -m comment --comment "DoH from access proxy {{ client }}" -j ACCEPT
 {% endfor %}
 
 # Everything else aimed at the protected ports is dropped.
@@ -45,6 +44,7 @@
 {% if mtproxy_enabled | default(false) | bool and proxy_port | int != 443 %}
 -A {{ squid_chain }} -p tcp --dport 443 -j DROP
 {% endif %}
+-A {{ squid_chain }} -p tcp --dport {{ dns_doh_backend_port | default(8443) | int }} -j DROP
 -A {{ squid_chain }} -p tcp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
 -A {{ squid_chain }} -p udp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
 

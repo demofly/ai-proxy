@@ -333,6 +333,10 @@
   ansible.builtin.include_tasks: https-proxy.yml
   when: proxy_role == 'access'
 
+- name: "Подключить настройку публичного DoH"
+  ansible.builtin.include_tasks: doh.yml
+  when: proxy_role == 'access'
+
 # ===========================================================================
 # Включить автозапуск и запустить nginx на узлах upstream
 # ===========================================================================

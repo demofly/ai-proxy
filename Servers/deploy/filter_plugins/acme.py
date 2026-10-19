@@ -2,23 +2,23 @@
 import ipaddress
 
 
-def https_proxy_acme_cluster(names, hostvars, current):
+def https_proxy_acme_cluster(names, hostvars, current, prefix="https_proxy"):
     def enabled(value):
         return str(value).lower() in ('true', 'yes', '1', 'on')
 
     result = {'nodes': [], 'peers': [], 'error': ''}
     try:
-        hostname = str(hostvars[current].get('https_proxy_hostname', '')).lower()
+        hostname = str(hostvars[current].get(prefix + '_hostname', '')).lower()
         addresses = set()
         for name in names:
             config = hostvars[name]
-            if (not enabled(config.get('https_proxy_enabled', False)) or
-                    str(config.get('https_proxy_hostname', '')).lower() != hostname):
+            if (not enabled(config.get(prefix + '_enabled', False)) or
+                    str(config.get(prefix + '_hostname', '')).lower() != hostname):
                 continue
-            if not enabled(config.get('https_proxy_acme_enabled', False)):
+            if not enabled(config.get(prefix + '_acme_enabled', prefix == 'dns_doh')):
                 raise ValueError('Все access с общим HTTPS-именем должны включать https_proxy_acme_enabled; смешанный режим с внешними сертификатами не поддерживается.')
             try:
-                address = ipaddress.ip_address(str(config.get('https_proxy_acme_address', config.get('ansible_host', ''))))
+                address = ipaddress.ip_address(str(config.get(prefix + '_acme_address', config.get('ansible_host', ''))))
                 if getattr(address, 'scope_id', None):
                     raise ValueError('Scoped IPv6 is not a shared ACME endpoint')
             except ValueError:

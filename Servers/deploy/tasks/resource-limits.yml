@@ -9,6 +9,7 @@
           {'name': 'unbound.service', 'memory_mb': mem_unbound_mb},
           {'name': 'haveged.service', 'memory_mb': mem_haveged_mb},
           {'name': 'aiproxy-health.service', 'memory_mb': mem_health_mb}]
+          + ([{'name': 'aiproxy-doh.service', 'memory_mb': mem_doh_mb}] if proxy_role == 'access' else [])
           + ([{'name': 'nginx.service', 'memory_mb': mem_nginx_mb}] if _proxy_nginx_needed | bool else [])
           + ([{'name': 'mtg.service', 'memory_mb': mem_mtproxy_mb}] if proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool else [])
           + ([{'name': 'keepalived.service', 'memory_mb': mem_keepalived_mb}] if proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined else [])

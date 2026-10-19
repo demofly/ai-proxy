@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# Only unbound.service uses this file. The host OpenSSL policy stays unchanged.
+openssl_conf = aiproxy_init
+config_diagnostics = 1
+[aiproxy_init]
+ssl_conf = aiproxy_ssl
+[aiproxy_ssl]
+system_default = aiproxy_doh
+[aiproxy_doh]
+MinProtocol = TLSv1.3
+MaxProtocol = TLSv1.3

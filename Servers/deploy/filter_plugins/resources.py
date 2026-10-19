@@ -4,7 +4,7 @@ import json
 import re
 
 MIB = 1048576
-PROXY_MEMORY_FLOORS = {'squid': 64, 'unbound': 24, 'nginx': 48, 'mtg': 32,
+PROXY_MEMORY_FLOORS = {'squid': 64, 'unbound': 24, 'doh': 32, 'nginx': 48, 'mtg': 32,
                        'crowdsec': 192, 'crowdsec_bouncer': 24,
                        'haveged': 8, 'health': 8, 'keepalived': 12}
 # Growth above the tested service floors; the floors are never scaled down.

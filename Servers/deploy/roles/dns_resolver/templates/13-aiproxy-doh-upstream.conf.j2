@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+# The outer SNI router prepends PROXY v1; strip it before Unbound's TLS socket.
+upstream aiproxy_doh_upstream {
+    server 127.0.0.1:{{ dns_doh_relay_port | default(4447) | int }};
+}
+server {
+    listen 127.0.0.1:{{ dns_doh_relay_port | default(4447) | int }} proxy_protocol;
+    set_real_ip_from 127.0.0.1;
+    allow 127.0.0.1;
+{% for client in _dns_allowed_clients %}
+    allow {{ client }};
+{% endfor %}
+    deny all;
+    proxy_pass 127.0.0.1:{{ dns_doh_backend_port | default(8443) | int }};
+    proxy_protocol off;
+    proxy_connect_timeout 3s;
+    proxy_timeout 300s;
+    proxy_socket_keepalive on;
+    proxy_buffer_size 4k;
+}

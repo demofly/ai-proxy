@@ -1,0 +1,33 @@
+---
+- name: "Проверить параметры транспорта DNS"
+  ansible.builtin.assert:
+    that:
+      - dns_resolver_port | default(53) | int == 53
+      - dnsproxy_version | default('0.86.0') is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - groups.get('upstreams', []) | length > 0
+      - dns_doh_sni | default('dns.transit.internal') is match('^[A-Za-z0-9.-]+$')
+      - dns_doh_sni | default('dns.transit.internal') | lower not in [squid_tls_sni | default('transit.internal') | lower, mtproxy_fake_tls_domain | default('max.ru') | lower, mtproxy_hostname | default('') | lower]
+    fail_msg: "Полный деплоймент требует локальный DNS на 53, непустой пул upstreams и версию dnsproxy в формате X.Y.Z."
+
+- name: "Проверить параметры публичного DoH"
+  ansible.builtin.assert:
+    that:
+      - proxy_role == 'access'
+      - behind_nginx | default(true) | bool
+      - dns_doh_hostname | default('') is match('^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}$')
+      - dns_doh_hostname | default('') | lower not in [https_proxy_hostname | default('') | lower, mtproxy_fake_tls_domain | default('max.ru') | lower, mtproxy_hostname | default('') | lower, squid_tls_sni | default('transit.internal') | lower]
+      - dns_doh_acme_email | default('') is match('^[^\s@]+@[^\s@]+\.[^\s@]+$')
+      - dns_doh_acme_webroot | default('/var/www/certbot') is match('^/[^\s;{}]+$')
+    fail_msg: "Публичный DoH требует access за nginx, отдельное dns_doh_hostname, email ACME и абсолютный webroot."
+  when: dns_doh_enabled | default(false) | bool
+
+- name: "Определить участников ACME для имени DoH"
+  ansible.builtin.set_fact:
+    _dns_doh_acme_cluster: "{{ groups.get('access_proxies', []) | https_proxy_acme_cluster(hostvars, inventory_hostname, 'dns_doh') }}"
+  when: dns_doh_enabled | default(false) | bool
+
+- name: "Проверить состав участников ACME DoH"
+  ansible.builtin.assert:
+    that: _dns_doh_acme_cluster.error == ''
+    fail_msg: "{{ _dns_doh_acme_cluster.error }}"
+  when: dns_doh_enabled | default(false) | bool

@@ -28,16 +28,15 @@
 -A SQUID-PROXY -s 203.0.113.1 -p tcp --dport 443 -j ACCEPT
 -A SQUID-PROXY -s 203.0.113.2 -p tcp --dport 443 -j ACCEPT
 
-# DNS (unbound) from access proxies - both transports
--A SQUID-PROXY -s 203.0.113.1 -p tcp --dport 53 -m comment --comment "DNS from access proxy 203.0.113.1" -j ACCEPT
--A SQUID-PROXY -s 203.0.113.1 -p udp --dport 53 -m comment --comment "DNS from access proxy 203.0.113.1" -j ACCEPT
--A SQUID-PROXY -s 203.0.113.2 -p tcp --dport 53 -m comment --comment "DNS from access proxy 203.0.113.2" -j ACCEPT
--A SQUID-PROXY -s 203.0.113.2 -p udp --dport 53 -m comment --comment "DNS from access proxy 203.0.113.2" -j ACCEPT
+# DoH from access proxies; no external plain DNS listener.
+-A SQUID-PROXY -s 203.0.113.1 -p tcp --dport 443 -m comment --comment "DoH from access proxy 203.0.113.1" -j ACCEPT
+-A SQUID-PROXY -s 203.0.113.2 -p tcp --dport 443 -m comment --comment "DoH from access proxy 203.0.113.2" -j ACCEPT
 
 # Everything else aimed at the protected ports is dropped.
 # Order matters: the chain is walked top-down, first match decides, and the
 # INPUT policy is ACCEPT — without these rules the ports stay open to everyone.
 -A SQUID-PROXY -p tcp --dport 443 -j DROP
+-A SQUID-PROXY -p tcp --dport 8443 -j DROP
 -A SQUID-PROXY -p tcp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
 -A SQUID-PROXY -p udp --dport 53 -m comment --comment "DNS deny: not an access proxy" -j DROP
 

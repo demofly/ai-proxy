@@ -1,0 +1,48 @@
+---
+- name: "Определить архитектуру и адреса DoH upstream"
+  ansible.builtin.set_fact:
+    _dnsproxy_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_architecture, '') }}"
+    _dns_doh_upstreams: "{{ groups['upstreams'] | dns_doh_upstreams(hostvars) }}"
+
+- name: "Проверить поддержку архитектуры и контрольную сумму dnsproxy"
+  ansible.builtin.assert:
+    that:
+      - _dnsproxy_arch | length > 0
+      - dnsproxy_checksums[_dnsproxy_arch] is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: "dnsproxy поддерживает amd64/arm64; для выбранной версии требуется SHA256 архива."
+
+- name: "Создать каталоги транспорта DoH"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - /etc/aiproxy
+    - /opt/aiproxy
+    - "/opt/aiproxy/dnsproxy-{{ dnsproxy_version }}"
+
+- name: "Загрузить фиксированную версию dnsproxy с проверкой SHA256"
+  ansible.builtin.get_url:
+    url: "https://github.com/AdguardTeam/dnsproxy/releases/download/v{{ dnsproxy_version }}/dnsproxy-linux-{{ _dnsproxy_arch }}-v{{ dnsproxy_version }}.tar.gz"
+    dest: "/opt/aiproxy/dnsproxy-{{ dnsproxy_version }}-{{ _dnsproxy_arch }}.tar.gz"
+    checksum: "{{ dnsproxy_checksums[_dnsproxy_arch] }}"
+    mode: '0644'
+
+- name: "Распаковать dnsproxy"
+  ansible.builtin.unarchive:
+    src: "/opt/aiproxy/dnsproxy-{{ dnsproxy_version }}-{{ _dnsproxy_arch }}.tar.gz"
+    dest: "/opt/aiproxy/dnsproxy-{{ dnsproxy_version }}"
+    remote_src: true
+    creates: "/opt/aiproxy/dnsproxy-{{ dnsproxy_version }}/linux-{{ _dnsproxy_arch }}/dnsproxy"
+
+- name: "Настроить DoH без проверки сертификата и открытого DNS fallback"
+  ansible.builtin.template:
+    src: dnsproxy.yml.j2
+    dest: /etc/aiproxy/dnsproxy.yml.aiproxy-staged
+    mode: '0644'
+
+- name: "Разместить службу транспорта DoH"
+  ansible.builtin.template:
+    src: aiproxy-doh.service.j2
+    dest: /etc/aiproxy/aiproxy-doh.service
+    mode: '0644'

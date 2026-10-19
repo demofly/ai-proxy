@@ -51,9 +51,9 @@ rectangle "Upstream Tier (вне РФ)" as upstream_tier #E3F2FD {
     component "MTProxy TLS term :4443" as mt_term
     component "Squid Upstream\n127.0.0.1:3128 за nginx :443" as squid_u1 #90CAF9
     component "MTProxy (mtg)\nlocalhost:2083" as mtp1 #42A5F5
-    component "Межсетевой экран\nUFW / nftables / цепочка iptables\n(выбор по состоянию ufw)\nSquid, MTProxy 443, DNS 53" as fw1 #BBDEFB
+    component "Межсетевой экран\nUFW / nftables / цепочка iptables\n(выбор по состоянию ufw)\nSquid, MTProxy, DoH :443" as fw1 #BBDEFB
     component "CrowdSec\nAgent + Bouncer" as cs_u1 #90CAF9
-    component "unbound\nlocalhost:53 + внешний адрес\n(только с access-нод)" as dns_u1 #64B5F6
+    component "unbound\nlocalhost:53 + TLS 127.0.0.1:8443/q\n(только с access-нод)" as dns_u1 #64B5F6
   }
 }
 
@@ -85,8 +85,10 @@ acme1 <.[#666666].> acme2 : HTTP-01 :80\nодин переход
 squid_u1 -[#E65100]-> ai_api : HTTPS :443
 
 ' DNS: каскад резолвинга
-dns1 -[#1565C0]-> dns_u1 : пересылка запросов\n53/tcp и 53/udp
-dns2 -[#1565C0]-> dns_u1 : пересылка запросов\n53/tcp и 53/udp
+dns1 -[#1565C0]-> nginx_u1 : пересылка запросов\nDoH HTTP/2 :443/q\nSNI=dns.transit.internal\nTLS 1.3, verify off\nidle 300s
+dns2 -[#1565C0]-> nginx_u1 : пересылка запросов\nDoH HTTP/2 :443/q\nSNI=dns.transit.internal\nTLS 1.3, verify off\nidle 300s
+
+nginx_u1 -[#1565C0]-> dns_u1 : relay :4447 → TLS :8443/q
 
 ' Telegram: client -> VIP -> nginx (access) -> TLS relay -> nginx (upstream) -> mtg -> Telegram DC
 tg_client -[#0D47A1]-> vip : fake-TLS :443

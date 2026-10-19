@@ -68,7 +68,10 @@ def build(output):
               fact(dns, '_dns_allowed_clients')]
     tasks.append({'name': 'Подготовить локальный контекст примера', 'ansible.builtin.set_fact': {
         'dns_allowed_clients': "{{ groups.access_proxies | map('extract', hostvars, 'ansible_host') | list }}",
-        '_dns_forwarders': "{{ groups.upstreams | map('extract', hostvars, 'ansible_host') | list if proxy_role == 'access' else dns_servers }}",
+        '_dns_forwarders': "{{ ['127.0.0.1@5353'] if proxy_role == 'access' else dns_servers }}",
+        '_dns_doh_upstreams': "{{ groups.upstreams | dns_doh_upstreams(hostvars) }}",
+        '_dnsproxy_arch': 'amd64',
+        '_dns_doh_acme_cluster': "{{ groups.access_proxies | https_proxy_acme_cluster(hostvars, inventory_hostname, 'dns_doh') if proxy_role == 'access' else {} }}",
         '_https_proxy_acme_cluster': "{{ groups.access_proxies | https_proxy_acme_cluster(hostvars, inventory_hostname) if proxy_role == 'access' else {} }}",
     }})
     manifest = []
@@ -103,6 +106,16 @@ def build(output):
         ('templates/keepalived.conf.j2', '/etc/keepalived/keepalived.conf', "proxy_role == 'access'"),
         ('templates/check_and_restart_squid.sh.j2', '/etc/keepalived/check_and_restart_squid.sh', "proxy_role == 'access'"),
         ('roles/dns_resolver/templates/unbound.conf.j2', '/etc/unbound/unbound.conf', None),
+        ('roles/dns_resolver/templates/unbound.conf.j2', '/etc/unbound/unbound.conf.aiproxy-staged', None),
+        ('roles/dns_resolver/templates/openssl-doh.cnf.j2', '/etc/unbound/openssl-doh.cnf', "proxy_role == 'upstream'"),
+        ('roles/dns_resolver/templates/13-aiproxy-doh-upstream.conf.j2', '/etc/nginx/stream.d/13-aiproxy-doh-upstream.conf', "proxy_role == 'upstream'"),
+        ('roles/dns_resolver/templates/aiproxy-doh-upstream-sni.conf.j2', '/etc/nginx/stream.d/sni-map.d/aiproxy-doh-upstream.conf', "proxy_role == 'upstream'"),
+        ('roles/dns_resolver/templates/dnsproxy.yml.j2', '/etc/aiproxy/dnsproxy.yml', "proxy_role == 'access'"),
+        ('roles/dns_resolver/templates/dnsproxy.yml.j2', '/etc/aiproxy/dnsproxy.yml.aiproxy-staged', "proxy_role == 'access'"),
+        ('roles/dns_resolver/templates/aiproxy-doh.service.j2', '/etc/aiproxy/aiproxy-doh.service', "proxy_role == 'access'"),
+        ('roles/dns_resolver/templates/aiproxy-doh.service.j2', '/etc/systemd/system/aiproxy-doh.service', "proxy_role == 'access'"),
+        ('roles/nginx/templates/12-aiproxy-doh.conf.j2', '/etc/nginx/stream.d/12-aiproxy-doh.conf', "proxy_role == 'access'"),
+        ('roles/nginx/templates/sni-map.d/aiproxy-doh.conf.j2', '/etc/nginx/stream.d/sni-map.d/aiproxy-doh.conf', "proxy_role == 'access'"),
         ('roles/crowdsec/templates/acquis.yaml.j2', '/etc/crowdsec/acquis.d/aiproxy.yaml', None),
         ('roles/crowdsec/templates/whitelist-infrastructure.yaml.j2', '/etc/crowdsec/parsers/s02-enrich/whitelist-infrastructure.yaml', None),
         ('roles/nginx/templates/10-aiproxy-upstreams.conf.j2', '/etc/nginx/stream.d/10-aiproxy-upstreams.conf', "proxy_role == 'access'"),
@@ -122,14 +135,23 @@ def build(output):
     ):
         add(target, template=template, when=when)
 
+    acme_doh = (DEPLOY / 'roles/nginx/templates/aiproxy-https-acme.conf.j2').read_text()
+    add('/etc/nginx/conf.d/aiproxy-dns-doh-acme.conf',
+        content="{% set _acme_site_id = 'dns-doh' %}\n{% set https_proxy_hostname = dns_doh_hostname %}\n"
+                "{% set _https_proxy_acme_cluster = _dns_doh_acme_cluster %}\n" + acme_doh,
+        original='roles/nginx/templates/aiproxy-https-acme.conf.j2', when="proxy_role == 'access'")
+
     # Inline copy.content is as much deployment configuration as *.j2.
     # Read its actual body rather than maintaining a parallel hand-written copy.
     inline_sources = {
         'playbook.yml': source['tasks'],
+        'tasks/upstream-firewall.yml': load(DEPLOY / 'tasks/upstream-firewall.yml'),
         'tasks/health.yml': load(DEPLOY / 'tasks/health.yml'),
         'tasks/shared-firewall.yml': load(DEPLOY / 'tasks/shared-firewall.yml'),
         'roles/crowdsec/tasks/main.yml': load(DEPLOY / 'roles/crowdsec/tasks/main.yml'),
         'roles/dns_resolver/tasks/main.yml': dns,
+        'roles/dns_resolver/tasks/activate.yml': load(DEPLOY / 'roles/dns_resolver/tasks/activate.yml'),
+        'roles/dns_resolver/tasks/doh-upstream.yml': load(DEPLOY / 'roles/dns_resolver/tasks/doh-upstream.yml'),
         'roles/mtproxy/tasks/daemon.yml': load(DEPLOY / 'roles/mtproxy/tasks/daemon.yml'),
         'roles/nginx/tasks/https-proxy-certificate.yml': load(DEPLOY / 'roles/nginx/tasks/https-proxy-certificate.yml'),
     }
@@ -137,6 +159,7 @@ def build(output):
         '/etc/security/limits.d/99-proxy.conf', '/etc/systemd/system/squid.service.d/limits.conf',
         '/etc/systemd/system/nginx.service.d/10-aiproxy-memory.conf',
         '/etc/systemd/system/unbound.service.d/memory-limit.conf',
+        '/etc/systemd/system/unbound.service.d/20-aiproxy-doh-tls.conf',
         '/etc/apt/apt.conf.d/20auto-upgrades', '/etc/apt/apt.conf.d/52aiproxy-unattended-upgrades',
         '/etc/apt/sources.list.d/crowdsec_crowdsec.list', '/etc/crowdsec/config.yaml.local',
         '/etc/systemd/system/crowdsec.service.d/10-aiproxy-memory.conf',
@@ -154,7 +177,7 @@ def build(output):
             if target not in targets or target in seen or 'content' not in body:
                 continue
             seen.add(target)
-            upstream = target.endswith(('/mtg.service', '/aiproxy-firewall.service'))
+            upstream = target.endswith(('/mtg.service', '/aiproxy-firewall.service', '/20-aiproxy-doh-tls.conf'))
             access_only = '/letsencrypt/' in target
             add(target, content=body['content'], original=origin,
                 when="proxy_role == 'upstream'" if upstream else "proxy_role == 'access'" if access_only else None)
@@ -165,10 +188,10 @@ def build(output):
             add('/etc/systemd/system/' + unit['name'], content=unit['content'], original='tasks/health.yml')
     limits = next(t['ansible.builtin.copy']['content'] for t in resources if 'ansible.builtin.copy' in t)
     for name, key in (('squid', 'mem_squid_mb'), ('nginx', 'mem_nginx_mb'), ('unbound', 'mem_unbound_mb'),
-                      ('haveged', 'mem_haveged_mb'), ('aiproxy-health', 'mem_health_mb'),
+                      ('aiproxy-doh', 'mem_doh_mb'), ('haveged', 'mem_haveged_mb'), ('aiproxy-health', 'mem_health_mb'),
                       ('crowdsec', 'mem_crowdsec_mb'), ('crowdsec-firewall-bouncer', 'mem_crowdsec_bouncer_mb'),
                       ('mtg', 'mem_mtproxy_mb'), ('keepalived', 'mem_keepalived_mb')):
-        when = "proxy_role == 'upstream'" if name == 'mtg' else "proxy_role == 'access'" if name == 'keepalived' else None
+        when = "proxy_role == 'upstream'" if name == 'mtg' else "proxy_role == 'access'" if name in ('keepalived', 'aiproxy-doh') else None
         add(f'/etc/systemd/system/{name}.service.d/zz-aiproxy-resources.conf',
             content=limits.replace('item.name', "'" + name + ".service'").replace('item.memory_mb', key),
             original='tasks/resource-limits.yml', when=when)

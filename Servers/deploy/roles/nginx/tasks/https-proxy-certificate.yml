@@ -1,5 +1,5 @@
 ---
-- name: "Установить Certbot для HTTPS-прокси"
+- name: "Установить Certbot для именного HTTPS-сервиса"
   ansible.builtin.apt:
     name: certbot
     state: present
@@ -19,7 +19,7 @@
 
 - name: "Сохранить прежний HTTP-фрагмент ACME для отката"
   ansible.builtin.slurp:
-    src: /etc/nginx/conf.d/aiproxy-https-acme.conf
+    src: /etc/nginx/conf.d/aiproxy-{{ _acme_site_id | default('https') }}-acme.conf
   register: _https_acme_previous
   failed_when: false
 
@@ -28,7 +28,7 @@
     - name: "Разместить именной HTTP-сайт проверки ACME"
       ansible.builtin.template:
         src: aiproxy-https-acme.conf.j2
-        dest: /etc/nginx/conf.d/aiproxy-https-acme.conf
+        dest: /etc/nginx/conf.d/aiproxy-{{ _acme_site_id | default('https') }}-acme.conf
         owner: root
         group: root
         mode: '0644'
@@ -42,7 +42,7 @@
     - name: "Восстановить прежний HTTP-фрагмент ACME"
       ansible.builtin.copy:
         content: "{{ _https_acme_previous.content | b64decode }}"
-        dest: /etc/nginx/conf.d/aiproxy-https-acme.conf
+        dest: /etc/nginx/conf.d/aiproxy-{{ _acme_site_id | default('https') }}-acme.conf
         owner: root
         group: root
         mode: '0644'
@@ -50,7 +50,7 @@
 
     - name: "Удалить новый HTTP-фрагмент ACME при откате"
       ansible.builtin.file:
-        path: /etc/nginx/conf.d/aiproxy-https-acme.conf
+        path: /etc/nginx/conf.d/aiproxy-{{ _acme_site_id | default('https') }}-acme.conf
         state: absent
       when: _https_acme_previous.content is not defined
 
@@ -115,7 +115,7 @@
     - not _https_existing_certificate.stat.exists
     - _https_proxy_acme_cluster.peers | length > 0
 
-- name: "Выпустить или продлить сертификат HTTPS-прокси через webroot"
+- name: "Выпустить или продлить сертификат HTTPS-сервиса через webroot"
   ansible.builtin.command:
     argv:
       - certbot

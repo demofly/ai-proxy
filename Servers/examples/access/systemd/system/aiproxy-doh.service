@@ -1,0 +1,30 @@
+# Ansible managed
+[Unit]
+Description=ai-proxy DNS over HTTPS transport
+After=network-online.target
+Wants=network-online.target
+Before=unbound.service
+StartLimitIntervalSec=0
+
+[Service]
+DynamicUser=yes
+ExecStart=/opt/aiproxy/dnsproxy-0.86.0/linux-amd64/dnsproxy --config-path=/etc/aiproxy/dnsproxy.yml
+Environment=GOMEMLIMIT=16MiB GOGC=50 GOMAXPROCS=1
+Environment=HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= http_proxy= https_proxy= all_proxy=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+MemoryAccounting=yes
+MemoryMax=32M
+MemorySwapMax=0
+OOMPolicy=kill
+LimitNOFILE=1024
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=10s
+
+[Install]
+WantedBy=multi-user.target

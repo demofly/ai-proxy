@@ -40,8 +40,8 @@
     pkg_state: "{{ 'latest' if (service_upgrades_enabled | default(true) | bool) else 'present' }}"
 
     # Единый источник истины: кому разрешён доступ к DNS-резолверу (unbound)
-    # upstream-нод на порту 53/tcp и 53/udp. Список потребляют ВСЕ точки
-    # ограничения — unbound access-control, nftables, UFW, iptables, — чтобы
+    # upstream-нод: DoH через общий SNI-порт 443. Список потребляют все точки
+    # ограничения — ACL DoH relay, Unbound и firewall, — чтобы
     # правило не расходилось между бэкендами.
     # Формируется из IP группы access_proxies; dns_extra_clients — необязательное
     # расширение из inventory (например, нода вне группы или отдельный резолвер).
@@ -85,12 +85,19 @@
 
     - name: "Определить работу Squid за nginx с учётом inventory"
       ansible.builtin.set_fact:
-        nginx_on_443: "{{ https_proxy_enabled | default(false) | bool or mtproxy_enabled | default(false) | bool or (behind_nginx | default(_nginx_443_detect.stdout | trim | bool) | bool) }}"
+        nginx_on_443: "{{ dns_doh_enabled | default(false) | bool or https_proxy_enabled | default(false) | bool or mtproxy_enabled | default(false) | bool or (behind_nginx | default(_nginx_443_detect.stdout | trim | bool) | bool) }}"
       tags: [always]
 
     - name: "Проверить согласованность портов прокси"
       ansible.builtin.include_tasks:
         file: tasks/ports.yml
+        apply:
+          tags: [always]
+      tags: [always]
+
+    - name: "Проверить параметры DNS и публичного DoH"
+      ansible.builtin.include_tasks:
+        file: tasks/dns-preflight.yml
         apply:
           tags: [always]
       tags: [always]
@@ -268,7 +275,7 @@
         recurse: false
       loop:
         - path: /etc/nginx/stream.d
-          own: ["00-sni-router.conf", "10-aiproxy-*.conf", "11-aiproxy-https-proxy.conf", "10-mtproxy-tls.conf",
+          own: ["00-sni-router.conf", "10-aiproxy-*.conf", "11-aiproxy-https-proxy.conf", "12-aiproxy-doh.conf", "13-aiproxy-doh-upstream.conf", "10-mtproxy-tls.conf",
                 "20-squid-tls-term.conf"]
         - path: /etc/nginx/stream.d/sni-map.d
           own: ["aiproxy.conf", "aiproxy-https-proxy.conf", "mtproxy.conf", "squid.conf"]
@@ -320,7 +327,7 @@
     - name: "Учесть общий nginx в плане ресурсов"
       tags: [always]
       ansible.builtin.set_fact:
-        _proxy_nginx_needed: "{{ https_proxy_enabled | default(false) | bool or behind_nginx | default(false) | bool or mtproxy_enabled | default(false) | bool or _proxy_nginx_state.stdout == 'active' }}"
+        _proxy_nginx_needed: "{{ dns_doh_enabled | default(false) | bool or https_proxy_enabled | default(false) | bool or behind_nginx | default(false) | bool or mtproxy_enabled | default(false) | bool or _proxy_nginx_state.stdout == 'active' }}"
 
     - name: "Проверить доли памяти и резервы узла"
       tags: [always]
@@ -348,7 +355,7 @@
       ansible.builtin.set_fact:
         _proxy_foreign_memory: >-
           {{ _proxy_service_memory.stdout | service_memory(
-             ['squid.service', 'unbound.service', 'nginx.service', 'haveged.service', 'aiproxy-health.service']
+             ['squid.service', 'unbound.service', 'aiproxy-doh.service', 'nginx.service', 'haveged.service', 'aiproxy-health.service']
              + (['mtg.service'] if (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool) else [])
              + (['keepalived.service'] if (proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined) else [])
              + (['crowdsec.service', 'crowdsec-firewall-bouncer.service'] if crowdsec_enabled | default(false) | bool else [])) }}
@@ -374,6 +381,7 @@
       ansible.builtin.set_fact:
         _proxy_enabled_services: >-
           {{ ['squid', 'unbound', 'haveged', 'health']
+             + (['doh'] if proxy_role == 'access' else [])
              + (['nginx'] if _proxy_nginx_needed | bool else [])
              + (['mtg'] if proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool else [])
              + (['keepalived'] if proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined else [])
@@ -416,6 +424,7 @@
       ansible.builtin.set_fact:
         mem_squid_mb: '{{ _proxy_memory_plan.limits.squid }}'
         mem_unbound_mb: '{{ _proxy_memory_plan.limits.unbound }}'
+        mem_doh_mb: '{{ _proxy_memory_plan.limits.doh }}'
         mem_nginx_mb: '{{ _proxy_memory_plan.limits.nginx }}'
         mem_mtproxy_mb: '{{ _proxy_memory_plan.limits.mtg }}'
         mem_keepalived_mb: '{{ _proxy_memory_plan.limits.keepalived }}'
@@ -442,6 +451,7 @@
         that:
           - mem_squid_mb | int >= 64
           - mem_unbound_mb | int >= 24
+          - proxy_role != 'access' or mem_doh_mb | int >= 32
           - mem_nginx_mb | int >= 48
           - mem_mtproxy_mb | int >= 32
           - mem_haveged_mb | int >= 8
@@ -468,7 +478,7 @@
       tags: [always]
       ansible.builtin.set_fact:
         mem_planned_mb: >-
-          {{ mem_squid_mb | int + mem_unbound_mb | int + mem_haveged_mb | int + mem_health_mb | int
+          {{ mem_squid_mb | int + mem_unbound_mb | int + (mem_doh_mb | int if proxy_role == 'access' else 0) + mem_haveged_mb | int + mem_health_mb | int
              + (mem_nginx_mb | int if (_proxy_nginx_needed | bool) else 0)
              + (mem_mtproxy_mb | int if (proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool) else 0)
              + (mem_keepalived_mb | int if (proxy_role == 'access' and enable_keepalived | default(false) | bool and keepalived_vip is defined) else 0)
@@ -826,8 +836,8 @@
     # ===========================================================================
     # Phase: DNS resolver (unbound caching resolver)
     # ===========================================================================
-    # ВАЖНО: upstream-ноды деплоятся первыми (они слушают DNS для access-нод)
-    # Порядок: upstreams → access обеспечивается inventory ordering
+    # DoH upstream проверяется с access после применения firewall на всех узлах.
+    # strategy: linear обеспечивает барьер задач; порядок inventory барьером не является.
 
     - name: "Подключить роль DNS-резолвера"
       ansible.builtin.include_role:
@@ -835,6 +845,33 @@
         apply:
           tags: [dns]
       tags: [dns]
+
+    - name: "Подготовить SNI-маршрут DoH на upstream до переключения DNS"
+      ansible.builtin.include_role:
+        name: dns_resolver
+        tasks_from: doh-router
+      when: proxy_role == 'upstream' and nginx_on_443 | bool
+
+    - name: "Подготовить межсетевой экран до переключения DNS"
+      ansible.builtin.include_tasks: tasks/upstream-firewall.yml
+
+    - name: "Активировать DoH upstream до переключения access"
+      ansible.builtin.include_role:
+        name: dns_resolver
+        tasks_from: activate
+      when: proxy_role == 'upstream'
+
+    - name: "Проверить DoH upstream перед переключением access"
+      ansible.builtin.command:
+        argv: [python3, -c, "{{ lookup('file', playbook_dir ~ '/scripts/check-doh.py') }}", "{{ groups['upstreams'] | dns_doh_upstreams(hostvars) | to_json }}"]
+      changed_when: false
+      when: proxy_role == 'access' and not ansible_check_mode
+
+    - name: "Активировать DNS access после готовности DoH upstream"
+      ansible.builtin.include_role:
+        name: dns_resolver
+        tasks_from: activate
+      when: proxy_role == 'access'
 
     # Общие задачи для всех прокси
 
@@ -946,13 +983,6 @@
     # ===========================================================================
     # Phase: Firewall detection (before roles that need it)
     # ===========================================================================
-
-    - name: "Проверить состояние UFW"
-      ansible.builtin.shell: |
-        ufw status 2>/dev/null | grep -q '^Status: active' && echo 'active' || echo 'inactive'
-      register: ufw_status
-      changed_when: false
-      failed_when: false
 
     # =======================================================================
     # Раздача материала участка узлам
@@ -1188,324 +1218,6 @@
       when: enable_logging | default(true) | bool
 
     # ===========================================================================
-    # Phase: Firewall (upstream only)
-    # ===========================================================================
-
-    # Настройка firewall (upstream) - UFW (если ufw активен)
-    - name: "Настроить UFW на upstream"
-      when: proxy_role == 'upstream' and ufw_status.stdout | default('') == 'active'
-      block:
-        # Обновление ufw безопасно: правила хранятся в /etc/ufw и переживают
-        # смену версии, а служба лишь применяет их заново при перезапуске.
-        - name: "Установить UFW"
-          ansible.builtin.package:
-            name: ufw
-            state: "{{ pkg_state }}"
-
-        - name: "Разрешить SSH в UFW"
-          community.general.ufw:
-            rule: allow
-            port: '22'
-            proto: tcp
-
-        - name: "Разрешить Squid только для access в UFW"
-          community.general.ufw:
-            rule: allow
-            port: "{{ proxy_port }}"
-            proto: tcp
-            from_ip: "{{ hostvars[item]['ansible_host'] }}"
-          loop: "{{ groups['access_proxies'] }}"
-
-        # Удалить устаревшее правило UFW для Squid на порту 443
-        # (Squid moved from behind nginx:443 to dedicated port)
-        # Не удаляем если MTProxy включён — порт 443 используется для SNI router
-        - name: "Удалить устаревшее правило UFW для Squid на порту 443"
-          community.general.ufw:
-            rule: allow
-            port: '443'
-            proto: tcp
-            from_ip: "{{ hostvars[item]['ansible_host'] }}"
-            delete: true
-          loop: "{{ groups['access_proxies'] }}"
-          failed_when: false
-          when: proxy_port | string != '443' and not (mtproxy_enabled | default(false) | bool)
-
-        - name: "Разрешить TLS MTProxy для access в UFW"
-          community.general.ufw:
-            rule: allow
-            from_ip: "{{ hostvars[item]['ansible_host'] }}"
-            to_port: "443"
-            proto: tcp
-            comment: "MTProxy TLS from {{ item }}"
-          loop: "{{ groups['access_proxies'] }}"
-          when: mtproxy_enabled | default(false) | bool
-
-        # DNS-резолвер upstream доступен только access-нодам.
-        # item.0 — IP клиента из dns_allowed_clients, item.1 — транспорт (tcp/udp)
-        - name: "Разрешить DNS Unbound для access в UFW"
-          community.general.ufw:
-            rule: allow
-            port: '53'
-            proto: "{{ item.1 }}"
-            from_ip: "{{ item.0 }}"
-          loop: "{{ dns_allowed_clients | product(['tcp', 'udp']) | list }}"
-
-        # Явный отказ прочим источникам. Дублирует default deny incoming, но
-        # переживает ручную смену политики по умолчанию и делает ограничение
-        # видимым в `ufw status`. Порядок важен: правило добавляется ПОСЛЕ allow.
-        - name: "Запретить DNS для остальных источников в UFW"
-          community.general.ufw:
-            rule: deny
-            port: '53'
-            proto: "{{ item }}"
-            comment: "DNS deny: not an access proxy"
-          loop:
-            - tcp
-            - udp
-
-        - name: "Включить UFW с запретом входящих соединений по умолчанию"
-          community.general.ufw:
-            state: enabled
-            default: deny
-            direction: incoming
-
-        - name: "Сохранить UFW как механизм ограничения DNS"
-          ansible.builtin.set_fact:
-            dns_firewall_backend: ufw
-
-    # Настройка firewall (upstream) - nftables (Debian без ufw)
-    - name: "Подготовить интеграцию межсетевого экрана с соседними проектами"
-      ansible.builtin.include_tasks: tasks/shared-firewall.yml
-
-    - name: "Настроить nftables на upstream (Debian)"
-      when: proxy_role == 'upstream' and ansible_distribution == 'Debian' and ufw_status.stdout | default('') != 'active'
-      block:
-        # ЕДИНСТВЕННОЕ исключение из режима обновления, и вот почему.
-        # ExecStop юнита nftables — `nft flush ruleset`, то есть перезапуск при
-        # обновлении пакета снимает ВЕСЬ набор правил узла, включая таблицы
-        # CrowdSec bouncer и правила соседних проектов, а восстанавливает только
-        # /etc/nftables.conf. По той же причине handler ниже делает reload, а не
-        # restart. Обновление nftables — операция планового окна, выполняется
-        # оператором вручную вместе со сверкой действующих правил после неё.
-        # Уязвимости пакета закрывает unattended-upgrades (только security).
-        - name: "Установить nftables"
-          ansible.builtin.package:
-            name: nftables
-            state: present
-
-        - name: "Проверить наличие общей таблицы nftables"
-          ansible.builtin.command: nft -j list table inet filter
-          register: _proxy_existing_nft_table
-          changed_when: false
-          failed_when: false
-          check_mode: false
-
-        - name: "Прочитать прежнюю конфигурацию владельца nftables"
-          ansible.builtin.slurp:
-            src: /etc/nftables.conf
-          register: _proxy_existing_nft_config
-          failed_when: false
-
-        - name: "Проверить принадлежность общей таблицы nftables"
-          ansible.builtin.assert:
-            that:
-              - >-
-                _proxy_existing_nft_table.rc != 0 or
-                ('# nftables Configuration - Upstream Proxy' in
-                 (_proxy_existing_nft_config.content | default('') | b64decode)
-                 and '# Managed by Ansible' in
-                 (_proxy_existing_nft_config.content | default('') | b64decode)) or
-                (_proxy_existing_nft_table.stdout | nft_empty_default_table)
-            fail_msg: >-
-              Существующая таблица inet filter не принадлежит ai-proxy. Замена её
-              цепочек input/forward/output запрещена; сначала согласуйте интеграцию межсетевого экрана узла.
-            success_msg: 'Таблица inet filter отсутствует, принадлежит ai-proxy или содержит только пустые стандартные цепочки.'
-
-        - name: "Разместить конфигурацию nftables"
-          ansible.builtin.template:
-            src: templates/nftables-upstream.conf.j2
-            dest: /etc/nftables.conf
-            owner: root
-            group: root
-            mode: '0644'
-            validate: '/usr/sbin/nft -c -f %s'
-          notify: "Перечитать конфигурацию nftables"
-
-        - name: "Включить автозапуск и запустить nftables"
-          ansible.builtin.systemd:
-            name: nftables
-            enabled: true
-            state: started
-
-        - name: "Сохранить nftables как механизм ограничения DNS"
-          ansible.builtin.set_fact:
-            dns_firewall_backend: nftables
-
-    # Настройка firewall (upstream) - iptables с собственной цепочкой (без ufw, без Debian)
-    # Ветка покрывает Ubuntu с неактивным ufw (состояние после чистой установки)
-    # и RHEL-семейство. Имя цепочки историческое: она фильтрует все входящие
-    # сервисы upstream-ноды — Squid, MTProxy (443) и DNS (53).
-    - name: "Настроить отдельную цепочку iptables на upstream"
-      when: proxy_role == 'upstream' and ansible_distribution != 'Debian' and ufw_status.stdout | default('') != 'active'
-      vars:
-        squid_chain: SQUID-PROXY
-        iptables_rules_path: /etc/iptables/aiproxy-upstream.rules
-      block:
-        # Минимальные образы Ubuntu/RHEL идут без iptables: без установки ветка
-        # обрывается на первой же задаче, и порт 53 остаётся открытым.
-        # Пакет персистентности (iptables-persistent / iptables-services) НЕ ставим:
-        # он восстанавливает при загрузке снимок ВСЕГО ruleset и тем самым откатывал бы
-        # правила co-deployment проектов (Matrix) к состоянию на момент нашего деплоя.
-        # Восстановлением своей цепочки занимается юнит aiproxy-firewall ниже.
-        # Обновление iptables безопасно: пакет не несёт службы, действующие
-        # правила живут в ядре и сменой версии утилиты не затрагиваются.
-        - name: "Установить iptables"
-          ansible.builtin.package:
-            name: iptables
-            state: "{{ pkg_state }}"
-
-        - name: "Создать каталог правил iptables"
-          ansible.builtin.file:
-            path: "{{ iptables_rules_path | dirname }}"
-            state: directory
-            owner: root
-            group: root
-            mode: '0755'
-
-        # Весь набор правил цепочки — одним файлом; он же источник для
-        # восстановления при загрузке. validate проверяет разбор до применения.
-        - name: "Разместить правила отдельной цепочки для IPv4 и IPv6"
-          ansible.builtin.template:
-            src: '{{ item.template }}'
-            dest: '{{ item.path }}'
-            owner: root
-            group: root
-            mode: '0644'
-            validate: '{{ item.restore }} --test %s'
-          loop:
-            - {template: templates/iptables-upstream.rules.j2, path: '{{ iptables_rules_path }}', restore: iptables-restore}
-            - {template: templates/ip6tables-upstream.rules.j2, path: /etc/iptables/aiproxy-upstream-v6.rules, restore: ip6tables-restore}
-
-        # `--noflush` заменяет ТОЛЬКО объявленную в файле цепочку и делает это одной
-        # транзакцией: окна с пустой цепочкой (в котором порт 53 открыт) не возникает,
-        # а цепочки co-deployment проектов и правила INPUT остаются нетронутыми.
-        # Изменение определяется сравнением цепочки до и после — команда идемпотентна
-        # по результату, но не по факту запуска.
-        - name: "Атомарно применить отдельную цепочку с сохранением чужих правил"
-          ansible.builtin.shell: |
-            set -e
-            before=$({{ item.command }} -S {{ squid_chain }} 2>/dev/null || true)
-            {{ item.command }}-restore --wait 10 --noflush {{ item.path }}
-            after=$({{ item.command }} -S {{ squid_chain }})
-            [ "$before" = "$after" ] || echo CHANGED
-          args:
-            executable: /bin/bash
-          register: iptables_chain_applied
-          changed_when: "'CHANGED' in iptables_chain_applied.stdout"
-          loop:
-            - {command: iptables, path: '{{ iptables_rules_path }}'}
-            - {command: ip6tables, path: /etc/iptables/aiproxy-upstream-v6.rules}
-
-        - name: "Проверить переход из INPUT в отдельную цепочку"
-          ansible.builtin.shell: |
-            {{ item }} -C INPUT -j {{ squid_chain }} 2>/dev/null && echo 'exists' || echo 'missing'
-          register: chain_jump_check
-          changed_when: false
-          failed_when: false
-          loop: [iptables, ip6tables]
-
-        - name: "Добавить переход в отдельную цепочку в начало INPUT"
-          ansible.builtin.shell: |
-            {{ item.item }} --wait 10 -I INPUT 1 -j {{ squid_chain }}
-          when: item.stdout == 'missing'
-          loop: '{{ chain_jump_check.results }}'
-
-        # Восстановление при загрузке — только своей цепочки и своего перехода из
-        # INPUT. Полное восстановление ruleset (iptables-persistent) здесь запрещено
-        # правилом co-deployment: оно вернуло бы и чужие правила из нашего снимка.
-        - name: "Разместить службу восстановления отдельной цепочки при загрузке"
-          ansible.builtin.copy:
-            dest: /etc/systemd/system/aiproxy-firewall.service
-            owner: root
-            group: root
-            mode: '0644'
-            content: |
-              [Unit]
-              Description=AI Proxy upstream firewall ({{ squid_chain }} chain)
-              DefaultDependencies=no
-              After=local-fs.target
-              Documentation=file://{{ iptables_rules_path }}
-              Wants=network-pre.target
-              Before=network-pre.target nginx.service squid.service unbound.service mtg.service
-
-              [Service]
-              Type=oneshot
-              RemainAfterExit=yes
-              ExecStart=/bin/sh -ec 'iptables-restore --wait 10 --noflush {{ iptables_rules_path }}; iptables -C INPUT -j {{ squid_chain }} 2>/dev/null || iptables --wait 10 -I INPUT 1 -j {{ squid_chain }}'
-              ExecStart=/bin/sh -ec 'ip6tables-restore --wait 10 --noflush /etc/iptables/aiproxy-upstream-v6.rules; ip6tables -C INPUT -j {{ squid_chain }} 2>/dev/null || ip6tables --wait 10 -I INPUT 1 -j {{ squid_chain }}'
-
-              [Install]
-              WantedBy=multi-user.target
-          register: aiproxy_fw_unit
-
-        - name: "Перечитать конфигурацию systemd после настройки межсетевого экрана"
-          ansible.builtin.systemd:
-            daemon_reload: true
-          when: aiproxy_fw_unit.changed
-
-        - name: "Включить восстановление отдельной цепочки при загрузке"
-          ansible.builtin.systemd:
-            name: aiproxy-firewall
-            enabled: true
-
-        - name: "Сохранить iptables как механизм ограничения DNS"
-          ansible.builtin.set_fact:
-            dns_firewall_backend: iptables
-
-    # ===========================================================================
-    # Phase: Firewall verification (upstream only)
-    # ===========================================================================
-    # Проверка читает ДЕЙСТВУЮЩИЕ правила ядра, а не шаблон: иначе «правило
-    # написано» неотличимо от «правило применено». Handlers сбрасываются заранее —
-    # без этого при изменении конфигурации nftables сверялась бы прежняя загрузка.
-    # Только для upstream: на access-нодах в очереди может стоять Перечитать конфигурацию Squid,
-    # а Squid там запускается позже по ходу плейбука.
-
-    - name: "Применить ожидающие изменения межсетевого экрана перед проверкой"
-      ansible.builtin.meta: flush_handlers
-      when: proxy_role == 'upstream'
-
-    - name: "Проверить ограничение доступа к DNS на upstream"
-      when: proxy_role == 'upstream'
-      tags: [firewall, dns]
-      block:
-        # Дамп всех трёх бэкендов сразу: какой из них реально применён,
-        # определяется дистрибутивом и состоянием ufw
-        - name: "Получить действующие правила всех механизмов межсетевого экрана"
-          ansible.builtin.shell: |
-            nft list table inet filter 2>/dev/null || true
-            ufw status verbose 2>/dev/null || true
-            iptables -S 2>/dev/null || true
-          args:
-            executable: /bin/bash
-          register: dns_fw_dump
-          changed_when: false
-
-        - name: "Проверить ограничение DNS на порту 53 TCP/UDP адресами access"
-          ansible.builtin.assert:
-            that:
-              - dns_firewall_backend is defined
-              - dns_fw_dump.stdout is search('dport (53|domain)|53/(tcp|udp)')
-              - dns_allowed_clients | reject('in', dns_fw_dump.stdout) | list | length == 0
-            fail_msg: >-
-              Ограничение доступа к DNS (53/tcp+udp) не найдено в действующих правилах
-              межсетевого экрана (механизм: {{ dns_firewall_backend | default('не определён') }}).
-              Резолвер unbound на {{ ansible_host }}:53 остаётся доступен посторонним.
-            success_msg: >-
-              DNS (53/tcp+udp) ограничен access-нодами
-              [{{ dns_allowed_clients | join(', ') }}], механизм: {{ dns_firewall_backend }}.
-
-    # ===========================================================================
     # Phase: автоматические обновления безопасности (unattended-upgrades)
     # ===========================================================================
     # Прежде пакет ставился только на upstream и не настраивался вовсе: узлы
@@ -1655,6 +1367,17 @@
 
     - name: "Выполнить ожидающие обработчики перед переносом служб в общий бюджет"
       ansible.builtin.meta: flush_handlers
+
+    - name: "Проверить DoH каждого upstream с access"
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - "{{ lookup('file', playbook_dir ~ '/scripts/check-doh.py') }}"
+          - "{{ groups['upstreams'] | dns_doh_upstreams(hostvars) | to_json }}"
+      changed_when: false
+      when: proxy_role == 'access' and not ansible_check_mode
+      tags: [dns]
 
     - name: "Применить полный бюджет ресурсов проекта"
       ansible.builtin.include_tasks: tasks/resource-limits.yml

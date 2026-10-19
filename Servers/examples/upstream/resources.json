@@ -9,6 +9,7 @@
         "limits": {
             "crowdsec": 192,
             "crowdsec_bouncer": 24,
+            "doh": 32,
             "haveged": 8,
             "health": 8,
             "keepalived": 12,

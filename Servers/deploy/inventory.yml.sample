@@ -20,6 +20,9 @@ all:
           # Нужен, если SSH использует DNS-имя или отдельный управляющий адрес.
           # Только IPv4/IPv6 без порта; адрес должен быть доступен соседям на 80/tcp.
           # https_proxy_acme_address: 203.0.113.1
+          # IP HTTP-01 данного узла для DoH; задаётся отдельно для каждого access.
+          # Не указывайте один адрес в общих vars для нескольких access.
+          # dns_doh_acme_address: 203.0.113.1
           # Адрес SSH; также источник адреса узла для ACL и межузлового трафика.
           ansible_host: 203.0.113.1
           # Начальное состояние VRRP; действует при enable_keepalived: true.
@@ -54,6 +57,17 @@ all:
 
         # Зашифрованный клиентский вход через SNI на общем 443; по умолчанию false.
         # Общие значения включают HTTPS на обоих access, соответствующих A/AAAA имени.
+        # Публичный DoH на https://dns.example.com/q, без авторизации и allowlist.
+        # При включении обязательны отдельное имя и email; сертификат ACME
+        # выпускается и продлевается независимо на каждом access, включая два IP.
+        dns_doh_enabled: true
+        # Все A/AAAA имени должны вести на подготовленные access с открытым 80/443.
+        dns_doh_hostname: dns.example.com
+        # Контакт Let's Encrypt; автоматическое сопровождение включено вместе с DoH.
+        dns_doh_acme_email: admin@example.com
+        # Webroot HTTP-01: локальный токен имеет приоритет, затем один переход к peer.
+        dns_doh_acme_webroot: /var/www/certbot
+
         # https_proxy_enabled: true
         # Одно публичное DNS-имя для двух IP; не совпадает с Matrix/MTProxy/transit.
         # https_proxy_hostname: proxy.example.com
@@ -165,6 +179,8 @@ all:
     #   squid: 64
     #   # Unbound: не менее 24 МиБ с учётом кешей и накладных расходов.
     #   unbound: 24
+    #   # DoH transport: не менее 32 МиБ, только на access.
+    #   doh: 32
     #   # Общий nginx: не менее 48 МиБ; учитывайте соседние проекты.
     #   nginx: 48
     #   # mtg: не менее 32 МиБ, учитывается только на включённых upstream.
@@ -261,9 +277,25 @@ all:
     # Буферизация журнала nginx: 32 КиБ, сброс раз в 5 секунд; false — без буфера.
     sni_router_log_buffered: true
 
-    # --- DNS: Squid → local Unbound → upstream Unbound → публичные DNS. ---
+    # --- DNS: access Unbound → dnsproxy → HTTPS upstream → Unbound → публичные DNS. ---
+    # Между access и upstream используется только DoH; проверка TLS-сертификата
+    # намеренно отключена. Открытого fallback на UDP/TCP 53 нет.
+    # TLS-порт backend Unbound; за nginx только loopback, наружу используется proxy_port.
+    dns_doh_upstream_port: 8443
+    # Порт локального транспорта dnsproxy, только 127.0.0.1 на access.
+    dns_doh_bridge_port: 5353
+    # Порт HTTP/2 Unbound за TLS-терминатором access, только loopback.
+    dns_doh_local_port: 5443
+    # Порт TLS-терминатора DoH за общим SNI-маршрутизатором, только loopback.
+    dns_doh_tls_port: 4446
+    # Фиксированная версия dnsproxy; смена требует соответствующих SHA256.
+    dnsproxy_version: '0.86.0'
+    # SHA256 официальных архивов релиза, отдельно для архитектур amd64/arm64.
+    dnsproxy_checksums:
+      amd64: sha256:17ac43f76ebfcedf547c663f6f31aa70e68b8eb6fc41d2fc37d3bfe21a2ced66
+      arm64: sha256:eda840d39da0c2777ea2431d3d73407e813e3fc0e411bfe256a9fb4b97d08247
     # Публичные форвардеры upstream Unbound (обычный DNS, не DNS-over-TLS).
-    # Access получает список форвардеров из адресов группы upstreams.
+    # Access получает HTTPS endpoints из IP группы upstreams и их dns_doh_upstream_port.
     dns_servers:
       - 9.9.9.9
       - 8.8.8.8
@@ -271,8 +303,8 @@ all:
     # Дополнительные доверенные IPv4 DNS-клиенты сверх группы access_proxies;
     # одновременно расширяют ACL Unbound и правила firewall. Пример: [203.0.113.10].
     dns_extra_clients: []
-    # Порт Unbound; весь плейбук использует фиксированный 53 в Squid/firewall
-    # и форвардинге. Иное значение годится только для самостоятельной роли
+    # Порт локального Unbound; Squid использует фиксированный 53
+    # для DNS. Иное значение годится только для самостоятельной роли
     # после согласованной настройки потребителей; в полном деплойменте оставьте 53.
     dns_resolver_port: 53
     # Проверка DNSSEC с корневым ключом доверия Unbound.

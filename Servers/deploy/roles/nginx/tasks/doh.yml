@@ -1,0 +1,132 @@
+---
+- name: "Исключить конфликт имени и порта публичного DoH"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import pathlib, subprocess, sys
+        hostname, port = sys.argv[1:]
+        own = pathlib.Path('/etc/nginx/stream.d/12-aiproxy-doh.conf')
+        for path in pathlib.Path('/etc/nginx/stream.d/sni-map.d').glob('*.conf'):
+            if path.name == 'aiproxy-doh.conf':
+                continue
+            for line in path.read_text().splitlines():
+                words = line.split()
+                if words and words[0].strip('"').lower() == hostname.lower():
+                    raise SystemExit('Имя DoH уже используется другим SNI-фрагментом')
+        listener = subprocess.check_output(['ss', '-H', '-ltnp', 'sport = :' + port], text=True)
+        expected = 'listen 127.0.0.1:' + port + ' ssl proxy_protocol;'
+        if listener.strip() and (not own.exists() or expected not in own.read_text() or
+                                 any('"nginx"' not in line for line in listener.splitlines())):
+            raise SystemExit('Порт DoH занят другой службой или конфигурацией')
+      - "{{ dns_doh_hostname }}"
+      - "{{ dns_doh_tls_port | default(4446) | int | string }}"
+  changed_when: false
+  when: dns_doh_enabled | default(false) | bool
+
+- name: "Подключить выпуск и продление сертификата DoH на каждом access"
+  ansible.builtin.include_tasks: https-proxy-certificate.yml
+  vars:
+    _acme_site_id: dns-doh
+    https_proxy_hostname: "{{ dns_doh_hostname }}"
+    https_proxy_acme_email: "{{ dns_doh_acme_email }}"
+    https_proxy_acme_webroot: "{{ dns_doh_acme_webroot | default('/var/www/certbot') }}"
+    _https_proxy_acme_cluster: "{{ _dns_doh_acme_cluster }}"
+  when: dns_doh_enabled | default(false) | bool
+
+- name: "Сохранить фрагменты DoH перед изменением"
+  ansible.builtin.slurp:
+    src: "{{ item }}"
+  loop:
+    - /etc/nginx/stream.d/12-aiproxy-doh.conf
+    - /etc/nginx/stream.d/sni-map.d/aiproxy-doh.conf
+  register: _dns_doh_previous
+  failed_when: false
+
+- name: "Применить фрагменты публичного DoH с проверкой и откатом"
+  block:
+    - name: "Разместить терминатор TLS и маршрут SNI DoH"
+      ansible.builtin.template:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: '0644'
+      loop:
+        - {src: 12-aiproxy-doh.conf.j2, dest: /etc/nginx/stream.d/12-aiproxy-doh.conf}
+        - {src: sni-map.d/aiproxy-doh.conf.j2, dest: /etc/nginx/stream.d/sni-map.d/aiproxy-doh.conf}
+      when: dns_doh_enabled | default(false) | bool
+      notify: "Перечитать конфигурацию nginx"
+
+    - name: "Удалить фрагменты выключенного публичного DoH"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/nginx/stream.d/12-aiproxy-doh.conf
+        - /etc/nginx/stream.d/sni-map.d/aiproxy-doh.conf
+        - /etc/nginx/conf.d/aiproxy-dns-doh-acme.conf
+        - /etc/nginx/.aiproxy-doh-public-applied
+      when: not (dns_doh_enabled | default(false) | bool)
+      notify: "Перечитать конфигурацию nginx"
+
+    - name: "Проверить nginx после настройки DoH"
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+  rescue:
+    - name: "Восстановить прежние фрагменты DoH"
+      ansible.builtin.copy:
+        content: "{{ item.content | b64decode }}"
+        dest: "{{ item.source }}"
+        mode: '0644'
+      loop: "{{ _dns_doh_previous.results }}"
+      when: item.content is defined
+
+    - name: "Удалить новые фрагменты DoH после ошибки проверки"
+      ansible.builtin.file:
+        path: "{{ item.item }}"
+        state: absent
+      loop: "{{ _dns_doh_previous.results }}"
+      when: item.content is not defined
+
+    - name: "Остановить развёртывание после отката DoH"
+      ansible.builtin.fail:
+        msg: "Конфигурация DoH не прошла nginx -t; прежние фрагменты восстановлены."
+
+- name: "Сверить публичный DoH с последним успешным применением nginx"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "{{ lookup('file', playbook_dir ~ '/scripts/nginx-doh-state.py') }}"
+      - "{{ ['/etc/nginx/stream.d/12-aiproxy-doh.conf', '/etc/nginx/stream.d/sni-map.d/aiproxy-doh.conf', '/etc/letsencrypt/live/' ~ dns_doh_hostname ~ '/fullchain.pem'] | to_json }}"
+      - /etc/nginx/.aiproxy-doh-public-applied
+  register: _dns_public_nginx_state
+  changed_when: "(_dns_public_nginx_state.stdout | default('{\"needs_apply\":false}', true) | from_json).needs_apply"
+  notify: "Перечитать конфигурацию nginx"
+  when: dns_doh_enabled | default(false) | bool and not ansible_check_mode
+
+- name: "Применить ожидающие изменения nginx перед проверкой публичного DoH"
+  ansible.builtin.meta: flush_handlers
+
+- name: "Проверить публичный DoH с доверенным сертификатом"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - "{{ lookup('file', playbook_dir ~ '/scripts/check-doh.py') }}"
+      - '[]'
+      - "{{ dns_doh_hostname }}"
+  register: _dns_public_response
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: _dns_public_response.rc == 0
+  when: dns_doh_enabled | default(false) | bool and not ansible_check_mode
+
+- name: "Зафиксировать успешно применённый публичный DoH nginx"
+  ansible.builtin.copy:
+    dest: /etc/nginx/.aiproxy-doh-public-applied
+    content: "{{ (_dns_public_nginx_state.stdout | from_json).digest }}\n"
+    mode: '0600'
+  when: dns_doh_enabled | default(false) | bool and not ansible_check_mode

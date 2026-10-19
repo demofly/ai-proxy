@@ -6,6 +6,7 @@
 -A SQUID-PROXY -i lo -j RETURN
 -A SQUID-PROXY -p tcp --dport 443 -j DROP
 -A SQUID-PROXY -p tcp --dport 53 -j DROP
+-A SQUID-PROXY -p tcp --dport 8443 -j DROP
 -A SQUID-PROXY -p udp --dport 53 -j DROP
 -A SQUID-PROXY -j RETURN
 COMMIT

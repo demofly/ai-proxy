@@ -30,7 +30,7 @@ package "Upstream Tier (вне РФ)" as UpstreamTier {
     component "Squid Upstream Proxy\n[C3-SU-001]\n127.0.0.1:3128 за nginx :443\nAnonymous transport" as SquidUpstream #LightGreen
     component "MTProxy (mtg)\n[C3-MT-001]\nlocalhost:2083\nfake-TLS Telegram" as MTProxy #Plum
     component "CrowdSec IPS\n[C3-CS-001]\nSSH log analysis" as CrowdSecUpstream #LightCoral
-    component "unbound DNS\n[C3-DN-001]\nlocalhost:53 + внешний адрес\n(только с access-нод)" as UnboundUpstream #LightBlue
+    component "unbound DNS\n[C3-DN-001]\nlocalhost:53 + TLS 127.0.0.1:8443/q\n(только с access-нод)" as UnboundUpstream #LightBlue
 }
 
 package "Control Plane" as ControlPlane {
@@ -54,7 +54,7 @@ SquidAccess --> NginxUpstream : cache_peer\nвыбор по хешу имени\
 
 ' --- Каскад резолвинга ---
 SquidAccess --> UnboundAccess : DNS-запросы\nlocalhost:53
-UnboundAccess --> UnboundUpstream : пересылка запросов\n53/tcp и 53/udp
+UnboundAccess --> UnboundUpstream : пересылка запросов\nDoH HTTP/2 :443/q\nSNI=dns.transit.internal\nTLS 1.3, verify off\nidle 300s
 
 ' --- Upstream -> External ---
 SquidUpstream --> AIAPI : HTTPS\n(TLS tunnel)

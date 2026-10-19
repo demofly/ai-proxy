@@ -70,6 +70,76 @@
     "note": ""
   },
   {
+    "file": "unbound/unbound.conf.aiproxy-staged",
+    "target": "/etc/unbound/unbound.conf.aiproxy-staged",
+    "source": "roles/dns_resolver/templates/unbound.conf.j2",
+    "when": "true",
+    "note": ""
+  },
+  {
+    "file": "unbound/openssl-doh.cnf",
+    "target": "/etc/unbound/openssl-doh.cnf",
+    "source": "roles/dns_resolver/templates/openssl-doh.cnf.j2",
+    "when": "proxy_role == 'upstream'",
+    "note": ""
+  },
+  {
+    "file": "nginx/stream.d/13-aiproxy-doh-upstream.conf",
+    "target": "/etc/nginx/stream.d/13-aiproxy-doh-upstream.conf",
+    "source": "roles/dns_resolver/templates/13-aiproxy-doh-upstream.conf.j2",
+    "when": "proxy_role == 'upstream'",
+    "note": ""
+  },
+  {
+    "file": "nginx/stream.d/sni-map.d/aiproxy-doh-upstream.conf",
+    "target": "/etc/nginx/stream.d/sni-map.d/aiproxy-doh-upstream.conf",
+    "source": "roles/dns_resolver/templates/aiproxy-doh-upstream-sni.conf.j2",
+    "when": "proxy_role == 'upstream'",
+    "note": ""
+  },
+  {
+    "file": "aiproxy/dnsproxy.yml",
+    "target": "/etc/aiproxy/dnsproxy.yml",
+    "source": "roles/dns_resolver/templates/dnsproxy.yml.j2",
+    "when": "proxy_role == 'access'",
+    "note": ""
+  },
+  {
+    "file": "aiproxy/dnsproxy.yml.aiproxy-staged",
+    "target": "/etc/aiproxy/dnsproxy.yml.aiproxy-staged",
+    "source": "roles/dns_resolver/templates/dnsproxy.yml.j2",
+    "when": "proxy_role == 'access'",
+    "note": ""
+  },
+  {
+    "file": "aiproxy/aiproxy-doh.service",
+    "target": "/etc/aiproxy/aiproxy-doh.service",
+    "source": "roles/dns_resolver/templates/aiproxy-doh.service.j2",
+    "when": "proxy_role == 'access'",
+    "note": ""
+  },
+  {
+    "file": "systemd/system/aiproxy-doh.service",
+    "target": "/etc/systemd/system/aiproxy-doh.service",
+    "source": "roles/dns_resolver/templates/aiproxy-doh.service.j2",
+    "when": "proxy_role == 'access'",
+    "note": ""
+  },
+  {
+    "file": "nginx/stream.d/12-aiproxy-doh.conf",
+    "target": "/etc/nginx/stream.d/12-aiproxy-doh.conf",
+    "source": "roles/nginx/templates/12-aiproxy-doh.conf.j2",
+    "when": "proxy_role == 'access'",
+    "note": ""
+  },
+  {
+    "file": "nginx/stream.d/sni-map.d/aiproxy-doh.conf",
+    "target": "/etc/nginx/stream.d/sni-map.d/aiproxy-doh.conf",
+    "source": "roles/nginx/templates/sni-map.d/aiproxy-doh.conf.j2",
+    "when": "proxy_role == 'access'",
+    "note": ""
+  },
+  {
     "file": "crowdsec/acquis.d/aiproxy.yaml",
     "target": "/etc/crowdsec/acquis.d/aiproxy.yaml",
     "source": "roles/crowdsec/templates/acquis.yaml.j2",
@@ -182,6 +252,13 @@
     "note": ""
   },
   {
+    "file": "nginx/conf.d/aiproxy-dns-doh-acme.conf",
+    "target": "/etc/nginx/conf.d/aiproxy-dns-doh-acme.conf",
+    "source": "roles/nginx/templates/aiproxy-https-acme.conf.j2",
+    "when": "proxy_role == 'access'",
+    "note": ""
+  },
+  {
     "file": "security/limits.d/99-proxy.conf",
     "target": "/etc/security/limits.d/99-proxy.conf",
     "source": "playbook.yml",
@@ -210,13 +287,6 @@
     "note": ""
   },
   {
-    "file": "systemd/system/aiproxy-firewall.service",
-    "target": "/etc/systemd/system/aiproxy-firewall.service",
-    "source": "playbook.yml",
-    "when": "proxy_role == 'upstream'",
-    "note": ""
-  },
-  {
     "file": "apt/apt.conf.d/20auto-upgrades",
     "target": "/etc/apt/apt.conf.d/20auto-upgrades",
     "source": "playbook.yml",
@@ -228,6 +298,13 @@
     "target": "/etc/apt/apt.conf.d/52aiproxy-unattended-upgrades",
     "source": "playbook.yml",
     "when": "true",
+    "note": ""
+  },
+  {
+    "file": "systemd/system/aiproxy-firewall.service",
+    "target": "/etc/systemd/system/aiproxy-firewall.service",
+    "source": "tasks/upstream-firewall.yml",
+    "when": "proxy_role == 'upstream'",
     "note": ""
   },
   {
@@ -275,15 +352,22 @@
   {
     "file": "systemd/resolved.conf.d/no-stub.conf",
     "target": "/etc/systemd/resolved.conf.d/no-stub.conf",
-    "source": "roles/dns_resolver/tasks/main.yml",
+    "source": "roles/dns_resolver/tasks/activate.yml",
     "when": "true",
     "note": ""
   },
   {
     "file": "resolv.conf",
     "target": "/etc/resolv.conf",
-    "source": "roles/dns_resolver/tasks/main.yml",
+    "source": "roles/dns_resolver/tasks/activate.yml",
     "when": "true",
+    "note": ""
+  },
+  {
+    "file": "systemd/system/unbound.service.d/20-aiproxy-doh-tls.conf",
+    "target": "/etc/systemd/system/unbound.service.d/20-aiproxy-doh-tls.conf",
+    "source": "roles/dns_resolver/tasks/doh-upstream.yml",
+    "when": "proxy_role == 'upstream'",
     "note": ""
   },
   {
@@ -333,6 +417,13 @@
     "target": "/etc/systemd/system/unbound.service.d/zz-aiproxy-resources.conf",
     "source": "tasks/resource-limits.yml",
     "when": "true",
+    "note": ""
+  },
+  {
+    "file": "systemd/system/aiproxy-doh.service.d/zz-aiproxy-resources.conf",
+    "target": "/etc/systemd/system/aiproxy-doh.service.d/zz-aiproxy-resources.conf",
+    "source": "tasks/resource-limits.yml",
+    "when": "proxy_role == 'access'",
     "note": ""
   },
   {

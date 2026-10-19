@@ -1,0 +1,55 @@
+---
+- name: "Проверить поддержку HTTP/2 в Unbound"
+  ansible.builtin.command: unbound -V
+  register: _dns_unbound_build
+  changed_when: false
+  failed_when: "_dns_unbound_build.rc != 0 or 'nghttp2' not in (_dns_unbound_build.stdout ~ _dns_unbound_build.stderr)"
+
+- name: "Создать каталог сертификата DoH upstream"
+  ansible.builtin.file:
+    path: /etc/unbound/tls
+    state: directory
+    owner: root
+    group: unbound
+    mode: '0750'
+
+- name: "Проверить срок сертификата DoH upstream"
+  ansible.builtin.command: openssl x509 -checkend 2592000 -noout -in /etc/unbound/tls/doh.pem
+  register: _dns_upstream_cert
+  changed_when: false
+  failed_when: false
+
+- name: "Создать или обновить самоподписанный сертификат DoH upstream"
+  ansible.builtin.command:
+    argv: [openssl, req, -x509, -newkey, 'rsa:2048', -nodes, -days, '3650', -subj, '/CN=ai-proxy-doh-upstream', -keyout, /etc/unbound/tls/doh.key, -out, /etc/unbound/tls/doh.pem]
+  when: _dns_upstream_cert.rc != 0
+
+- name: "Ограничить доступ к ключу DoH upstream"
+  ansible.builtin.file:
+    path: /etc/unbound/tls/doh.key
+    owner: root
+    group: unbound
+    mode: '0640'
+
+- name: "Настроить TLS 1.3 для DoH в OpenSSL службы Unbound"
+  ansible.builtin.template:
+    src: openssl-doh.cnf.j2
+    dest: /etc/unbound/openssl-doh.cnf
+    owner: root
+    group: unbound
+    mode: '0644'
+
+- name: "Создать каталог настроек TLS службы Unbound"
+  ansible.builtin.file:
+    path: /etc/systemd/system/unbound.service.d
+    state: directory
+    mode: '0755'
+
+- name: "Ограничить политику OpenSSL только службой Unbound"
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/unbound.service.d/20-aiproxy-doh-tls.conf
+    mode: '0644'
+    content: |
+      [Service]
+      Environment=OPENSSL_CONF=/etc/unbound/openssl-doh.cnf
+  register: _dns_tls_unit
