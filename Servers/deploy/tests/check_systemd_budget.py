@@ -41,6 +41,8 @@ def main():
         for task in tasks:
             if 'ansible.builtin.template' in task:
                 task['ansible.builtin.template']['src'] = str(DEPLOY/'templates/aiproxy.slice.j2')
+            if task.get('name') == 'Проверить настроенные и действующие пределы всех служб':
+                task['ansible.builtin.command']['argv'][2] = (DEPLOY/'scripts/check-resources.py').read_text()
         with tempfile.TemporaryDirectory(prefix=name) as temp:
             fixture = Path(temp)/'play.yml'
             fixture.write_text(yaml.safe_dump([dict(hosts='localhost', gather_facts=False,

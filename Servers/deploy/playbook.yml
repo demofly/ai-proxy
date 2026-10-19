@@ -6,6 +6,7 @@
 - name: "Развернуть ai-proxy на базе Squid"
   hosts: all
   become: true
+  gather_facts: false
   # All ACME HTTP responders must be loaded before any node requests a certificate.
   strategy: linear
 
@@ -60,6 +61,12 @@
     # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
+    - name: "Проверить срок актуальности кеша apt"
+      ansible.builtin.assert:
+        that: apt_cache_valid_time | default(3600) | string is match('^[0-9]+$')
+        fail_msg: "apt_cache_valid_time должен быть целым неотрицательным числом секунд."
+      tags: [always]
+
     - name: "Проверить наличие nginx на порту 443"
       ansible.builtin.shell: |
         set -o pipefail
@@ -202,7 +209,7 @@
     - name: "Обновить сведения об оборудовании перед расчётом ресурсов"
       tags: [always]
       ansible.builtin.setup:
-        gather_subset: ['!all', '!min', hardware]
+        gather_subset: ['!all', min, hardware, network]
 
     - name: "Определить параметры ресурсов с учётом inventory"
       tags: [always]
@@ -529,7 +536,7 @@
     - name: "Обновить кеш пакетов apt (Debian)"
       ansible.builtin.apt:
         update_cache: true
-        cache_valid_time: 3600
+        cache_valid_time: "{{ apt_cache_valid_time | default(3600) | int }}"
       when: ansible_os_family == 'Debian'
 
     # Удаление ненужных пакетов
@@ -1077,9 +1084,8 @@
     # Phase: Squid configuration
     # ===========================================================================
 
-    # Конфигурация для access прокси (только если MTProxy отключён)
-    # При включённом MTProxy deploy squid config происходит в роли nginx
-    - name: "Разместить конфигурацию Squid на access без MTProxy"
+    # Прямой access настраивается здесь; при nginx_on_443 конфиг уже размещён ролью nginx.
+    - name: "Разместить конфигурацию прямого Squid на access"
       ansible.builtin.template:
         src: templates/squid-access.conf.j2
         dest: "{{ squid_config_path }}"
@@ -1087,7 +1093,7 @@
         group: root
         mode: '0644'
         validate: 'squid -k parse -f %s'
-      when: proxy_role == 'access' and not (mtproxy_enabled | default(false) | bool)
+      when: proxy_role == 'access' and not (nginx_on_443 | bool)
       register: squid_config_access
 
     # Конфигурация для upstream прокси
@@ -1564,12 +1570,6 @@
           // Перезагрузка — только руками оператора (см. комментарий в playbook).
           Unattended-Upgrade::Automatic-Reboot "false";
       when: ansible_os_family == 'Debian'
-
-    - name: "Включить автозапуск и запустить Squid"
-      ansible.builtin.systemd:
-        name: squid
-        enabled: true
-        state: started
 
     - name: "Настроить локальную проверку работоспособности служб"
       ansible.builtin.include_tasks: tasks/health.yml

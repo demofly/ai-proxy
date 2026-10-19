@@ -34,8 +34,10 @@
       [Install]
       WantedBy=multi-user.target
 
+  register: _aiproxy_shared_ports_unit
+
 - name: "Включить сохранённые правила межсетевого экрана для общих служб"
   ansible.builtin.systemd:
     name: aiproxy-shared-ports
     enabled: true
-    daemon_reload: true
+    daemon_reload: "{{ _aiproxy_shared_ports_unit.changed }}"

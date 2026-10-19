@@ -144,11 +144,13 @@
 # Генерация секрета при первом деплое (если не задан вручную)
 # Проверяем mtg.toml (v2) и mtg.env (legacy) для обратной совместимости
 - name: "Проверить наличие конфигурации mtg в формате TOML"
+  when: hostvars["localhost"]._mtproxy_cluster_secret is not defined and mtproxy_secret == ""
   ansible.builtin.stat:
     path: /etc/mtproxy/mtg.toml
   register: mtg_toml_file
 
 - name: "Проверить наличие прежнего файла mtg.env"
+  when: hostvars["localhost"]._mtproxy_cluster_secret is not defined and mtproxy_secret == ""
   ansible.builtin.stat:
     path: /etc/mtproxy/mtg.env
   register: mtg_env_file
@@ -158,10 +160,10 @@
     cmd: /usr/local/bin/mtg generate-secret --hex {{ mtproxy_fake_tls_domain }}
   register: mtg_generated_secret
   when:
+    - hostvars["localhost"]._mtproxy_cluster_secret is not defined
     - mtproxy_secret == ""
     - not mtg_toml_file.stat.exists
     - not mtg_env_file.stat.exists
-    - hostvars['localhost']._mtproxy_cluster_secret is not defined
   changed_when: false
   no_log: true
 
@@ -170,6 +172,7 @@
     cmd: grep '^secret' /etc/mtproxy/mtg.toml | sed 's/.*"\(.*\)"/\1/'
   register: mtg_existing_secret_toml
   when:
+    - hostvars["localhost"]._mtproxy_cluster_secret is not defined
     - mtproxy_secret == ""
     - mtg_toml_file.stat.exists
   changed_when: false
@@ -180,6 +183,7 @@
     cmd: grep '^MTG_SECRET=' /etc/mtproxy/mtg.env | cut -d= -f2
   register: mtg_existing_secret_env
   when:
+    - hostvars["localhost"]._mtproxy_cluster_secret is not defined
     - mtproxy_secret == ""
     - not mtg_toml_file.stat.exists
     - mtg_env_file.stat.exists
@@ -215,7 +219,6 @@
   ansible.builtin.file:
     path: /etc/mtproxy/mtg.env
     state: absent
-  when: mtg_env_file.stat.exists | default(false)
 
 - name: "Разместить административный реестр пользователей MTProxy"
   ansible.builtin.template:
@@ -247,17 +250,13 @@
 
       [Install]
       WantedBy=multi-user.target
-  notify:
-    - "Перечитать конфигурацию systemd для mtg"
-    - "Перезапустить mtg"
-
-- name: "Перечитать конфигурацию systemd после установки службы mtg"
-  ansible.builtin.systemd:
-    daemon_reload: true
+  register: _mtg_unit
+  notify: "Перезапустить mtg"
 
 - name: "Включить автозапуск и запустить mtg"
   ansible.builtin.systemd:
     name: mtg
+    daemon_reload: "{{ _mtg_unit.changed }}"
     state: started
     enabled: true
 

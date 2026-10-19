@@ -188,6 +188,7 @@
   block:
     - name: "Проверить слушатели Unbound"
       ansible.builtin.wait_for:
+        host: "{{ item }}"
         port: "{{ dns_resolver_port | default(53) }}"
         state: started
         timeout: 15

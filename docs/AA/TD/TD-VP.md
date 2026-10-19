@@ -1,7 +1,7 @@
 <!-- [AIGD] -->
 # TD-VP — Viewpoints (представления стейкхолдеров)
 
-**Последняя правка AI:** 2026-08-29T11:04:55Z
+**Последняя правка AI:** 2026-10-19T12:17:37Z
 
 ## Описание
 
@@ -75,7 +75,7 @@
 | VRRP failover | Автоматический; ручной — остановка Keepalived | `systemctl stop keepalived` на MASTER |
 | Обновление пакетов ОС | Рядовой прогон при `service_upgrades_enabled: true` (умолчание) доводит пакеты до последней доступной версии. Службы перезапускаются сценариями пакетов; задачи установки несут `throttle: 1`, поэтому узлы обновляются по одному | `ansible-playbook -i inventory.yml playbook.yml` |
 | Заморозка версий | Прогон сводит только конфигурацию, версии не двигаются. Режим инцидента и режим узла, где разделяемую службу обновляет проект-владелец | `service_upgrades_enabled: false` в inventory |
-| Обновление CrowdSec | Коллекции обновляются **автоматически при каждом прогоне** (роль `crowdsec`: `cscli hub update` → `cscli collections upgrade --all`, перезапуск движка при изменении состава). Ручной прогон нужен лишь вне окна развёртывания | `cscli hub update && cscli collections upgrade --all` |
+| Обновление CrowdSec | Синхронизация при деплое по сроку (crowdsec_hub_update_interval, по умолчанию 6 часов), force или дрейфу файлов. Недостающие коллекции ставятся одной командой, движок применяется только при изменении активного содержимого или незавершённом применении | `ansible-playbook -i Servers/deploy/inventory.yml Servers/deploy/playbook.yml --tags crowdsec -e crowdsec_hub_force_update=true` |
 | Обновление nftables | Единственный пакет вне режима обновления: ExecStop юнита сбрасывает ruleset узла целиком вместе с таблицами CrowdSec bouncer. Только вручную, в плановом окне, со сверкой действующих правил после | `apt install --only-upgrade nftables`, затем `nft list ruleset` и сверка с `/etc/nftables.conf` |
 | Обновление mtg (MTProxy) | Смена номера версии ведёт к переустановке: бинарник ставится в `/usr/local/lib/mtg/{версия}/mtg`, `/usr/local/bin/mtg` переключается на него, служба перезапускается. Совместимость клиентов проверяется после перезапуска | `mtproxy_version` в inventory → `ansible-playbook … --tags mtproxy` |
 | Откат mtg на прежнюю версию | Возврат прежнего номера: каталог предыдущей версии остаётся на узле, повторная загрузка не нужна — переключается только ссылка | `mtproxy_version` в inventory → `ansible-playbook … --tags mtproxy` |

@@ -36,6 +36,7 @@
       - libnginx-mod-stream
     state: "{{ pkg_state }}"
     update_cache: true
+    cache_valid_time: "{{ apt_cache_valid_time | default(3600) | int }}"
   register: nginx_installed
   throttle: 1
 

@@ -30,6 +30,7 @@
     src: '{{ playbook_dir }}/templates/aiproxy.slice.j2'
     dest: /etc/systemd/system/aiproxy.slice
     mode: '0644'
+  register: _proxy_slice_unit
 
 - name: "Создать каталоги переопределений ресурсов управляемых служб"
   ansible.builtin.file:
@@ -63,44 +64,22 @@
   loop: '{{ _proxy_resource_units }}'
   loop_control:
     label: '{{ item.name }}'
+  register: _proxy_resource_dropins
 
 - name: "Загрузить общие и индивидуальные пределы ресурсов"
   ansible.builtin.systemd:
     daemon_reload: true
+  when: _proxy_slice_unit.changed or _proxy_resource_dropins.changed
 
-- name: "Получить фактическое размещение служб в cgroup"
+# One systemctl query and local cgroup reads replace three remote loops.
+- name: "Проверить настроенные и действующие пределы всех служб"
   ansible.builtin.command:
-    argv: [systemctl, show, '{{ item.name }}', --property=ControlGroup, --value]
-  register: _proxy_cgroups
-  changed_when: false
-  loop: '{{ _proxy_resource_units }}'
-  loop_control:
-    label: '{{ item.name }}'
+    argv:
+      - python3
+      - -c
+      - "{{ lookup('ansible.builtin.file', playbook_dir ~ '/scripts/check-resources.py') }}"
+      - "{{ _proxy_resource_units | to_json }}"
+      - aiproxy.slice
+  register: _proxy_resource_probe
+  changed_when: (_proxy_resource_probe.stdout | default('{"reloaded":false}', true) | from_json).reloaded | bool
   when: not ansible_check_mode
-
-- name: "Проверить настроенные пределы служб и принадлежность к slice"
-  ansible.builtin.command:
-    argv: [systemctl, show, '{{ item.name }}', --property=ControlGroup, --property=MemoryMax, --property=Slice]
-  register: _proxy_effective_limits
-  changed_when: false
-  failed_when: >-
-    ('MemoryMax=' ~ ((item.memory_mb | int * 1048576) | string)) not in _proxy_effective_limits.stdout
-    or 'Slice=aiproxy.slice' not in _proxy_effective_limits.stdout
-  loop: '{{ _proxy_resource_units }}'
-  loop_control:
-    label: '{{ item.name }}'
-  when: not ansible_check_mode
-
-- name: "Получить действующие пределы памяти cgroup v2 до завершения переноса служб"
-  ansible.builtin.slurp:
-    src: '/sys/fs/cgroup{{ item.stdout }}/memory.max'
-  register: _proxy_live_cap
-  failed_when: >-
-    _proxy_live_cap.failed | default(false)
-    or (_proxy_live_cap.content | b64decode | trim | int) != item.item.memory_mb | int * 1048576
-  loop: '{{ _proxy_cgroups.results | default([]) }}'
-  loop_control:
-    label: '{{ item.item.name }}'
-  when:
-    - not ansible_check_mode
-    - item.stdout | default('') | length > 0

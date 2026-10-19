@@ -34,10 +34,11 @@
         WantedBy=timers.target
   loop_control:
     label: '{{ item.name }}'
+  register: _aiproxy_health_units
 
 - name: "Включить периодическую локальную проверку работоспособности"
   ansible.builtin.systemd:
     name: aiproxy-health.timer
-    daemon_reload: true
+    daemon_reload: "{{ _aiproxy_health_units.changed }}"
     enabled: true
     state: started
