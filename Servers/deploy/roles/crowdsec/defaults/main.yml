@@ -16,3 +16,9 @@ service_upgrades_enabled: true
 
 # Состояние пакета, выведенное из флага выше.
 pkg_state: "{{ 'latest' if service_upgrades_enabled | bool else 'present' }}"
+
+# Hub checks are independent of package upgrades. 0 checks on every deployment;
+# otherwise a fresh successful snapshot avoids cscli/network work until expiry.
+crowdsec_hub_update_interval: 21600
+# Force a check now, including within the interval; does not force engine restart.
+crowdsec_hub_force_update: false

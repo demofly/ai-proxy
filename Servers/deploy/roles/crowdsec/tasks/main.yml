@@ -4,6 +4,11 @@
 
 # --- CrowdSec repository ---
 
+- name: "Проверить интервал обновления Hub CrowdSec"
+  ansible.builtin.assert:
+    that: crowdsec_hub_update_interval | string is match('^[0-9]+$')
+    fail_msg: "crowdsec_hub_update_interval должен быть целым неотрицательным числом секунд."
+
 - name: "Создать каталог ключей репозиториев apt"
   ansible.builtin.file:
     path: /etc/apt/keyrings
@@ -14,6 +19,7 @@
   ansible.builtin.shell:
     cmd: curl -fsSL https://packagecloud.io/crowdsec/crowdsec/gpgkey | gpg --dearmor -o /etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg
     creates: /etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg
+  register: _crowdsec_key
 
 - name: "Добавить репозиторий apt CrowdSec"
   ansible.builtin.copy:
@@ -23,38 +29,37 @@
       deb [signed-by=/etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/any/ any main
       deb-src [signed-by=/etc/apt/keyrings/crowdsec_crowdsec-archive-keyring.gpg] https://packagecloud.io/crowdsec/crowdsec/any/ any main
 
+  register: _crowdsec_repository
+
 - name: "Обновить кеш apt после добавления репозитория CrowdSec"
   ansible.builtin.apt:
     update_cache: true
+    cache_valid_time: "{{ 0 if (_crowdsec_key.changed or _crowdsec_repository.changed) else apt_cache_valid_time | default(3600) | int }}"
 
 # --- Install CrowdSec packages ---
 
-- name: "Восстановить состояние dpkg после незавершённой установки"
-  ansible.builtin.command:
-    cmd: dpkg --configure -a
-  changed_when: false
-  failed_when: false
+# Check first: unconditionally configuring dpkg can run unrelated postinst
+# scripts on a shared host. A genuine recovery failure must stop deployment.
+- name: "Восстановить dpkg только при незавершённых операциях"
+  ansible.builtin.shell: |
+    set -eu
+    pending="$(dpkg --audit)"
+    if [ -n "$pending" ]; then
+      dpkg --configure -a
+      printf 'CONFIGURED\n'
+    fi
+  register: _crowdsec_dpkg_recovery
+  changed_when: "'CONFIGURED' in _crowdsec_dpkg_recovery.stdout"
 
-# Обновление движка перезапускает службу: на время перезапуска решения о
-# блокировке не принимаются, уже поставленные бэкендом правила остаются в силе.
-# `throttle: 1` разводит перезапуск по узлам, чтобы окно без разбора журналов
-# не совпало на всей группе разом.
-- name: "Установить CrowdSec"
+# One package transaction, with the same package-upgrade policy as other roles.
+- name: "Установить CrowdSec и firewall bouncer"
   ansible.builtin.apt:
-    name: crowdsec
+    name: [crowdsec, crowdsec-firewall-bouncer-nftables]
     state: "{{ pkg_state }}"
   environment:
     CROWDSEC_PACKAGE_DISABLE_WIZARD: "1"
   throttle: 1
-
-# Обновление бэкенда блокировок перезапускает его; при старте он заново
-# выстраивает собственные таблицы nftables по списку решений из локальной базы,
-# поэтому действующие блокировки переживают смену версии.
-- name: "Установить firewall bouncer CrowdSec для nftables"
-  ansible.builtin.apt:
-    name: crowdsec-firewall-bouncer-nftables
-    state: "{{ pkg_state }}"
-  throttle: 1
+  register: _crowdsec_packages
 
 # SQLite connections each retain native/page-cache memory outside GOMEMLIMIT.
 # Preserve operator/neighbor settings while bounding the local SQLite pool.
@@ -91,70 +96,6 @@
      | combine(_crowdsec_local_config, recursive=true)).db_config.type == 'sqlite'
   notify: "Перезапустить CrowdSec"
   no_log: true
-
-# --- Install and upgrade collections (detection scenarios + parsers) ---
-#
-# Правила детектирования — самая быстро меняющаяся часть IPS, и обновляются они
-# НЕЗАВИСИМО от режима обновления пакетов: отставшие правила не ловят текущие
-# атаки, а служба при этом выглядит работающей.
-
-- name: "Обновить индекс коллекций CrowdSec"
-  ansible.builtin.command:
-    cmd: cscli hub update
-  changed_when: false
-  retries: 3
-  delay: 10
-  register: hub_update
-  until: hub_update.rc == 0
-
-# Состав коллекций с их версиями снимается ДО правок и сверяется ПОСЛЕ.
-# Прежняя редакция определяла изменение по подстрокам в stderr утилиты
-# ('overwrite', 'already'): формулировки утилиты меняются между её версиями, и
-# признак ломается молча — отчёт остаётся зелёным, показывая неверный результат.
-# Сверка состава от формулировок не зависит.
-- name: "Получить список коллекций CrowdSec до изменений"
-  ansible.builtin.command:
-    cmd: cscli collections list -o json
-  register: _cs_collections_before
-  changed_when: false
-
-# Установка недостающих коллекций. Для уже установленной коллекции команда
-# ничего не делает — новых версий она НЕ приносит, этим занимается upgrade ниже.
-- name: "Установить коллекции CrowdSec"
-  ansible.builtin.command:
-    cmd: "cscli collections install {{ item }}"
-  loop:
-    - crowdsecurity/linux
-    - crowdsecurity/nginx
-    - crowdsecurity/http-cve
-    - crowdsecurity/whitelist-good-actors
-  register: cscli_install
-  changed_when: false
-  retries: 3
-  delay: 10
-  until: cscli_install.rc == 0
-
-# Перевод установленных коллекций на версии из индекса хаба. Ровно эта команда
-# была записана в docs/AA/TD/TD-VP.md как ручной сценарий оператора; перенос её
-# в роль снимает расхождение между описанным сценарием и кодом.
-- name: "Обновить установленные коллекции CrowdSec до версий каталога"
-  ansible.builtin.command:
-    cmd: cscli collections upgrade --all
-  register: cscli_upgrade
-  changed_when: false
-  retries: 3
-  delay: 10
-  until: cscli_upgrade.rc == 0
-
-# Факт изменения — расхождение состава до и после. Перезапуск нужен потому, что
-# движок держит разобранные сценарии и парсеры в памяти: без него новые правила
-# лежат на диске, но не действуют.
-- name: "Проверить изменения коллекций и запланировать перезапуск CrowdSec"
-  ansible.builtin.command:
-    cmd: cscli collections list -o json
-  register: _cs_collections_after
-  changed_when: _cs_collections_after.stdout != _cs_collections_before.stdout
-  notify: "Перезапустить CrowdSec"
 
 # --- Whitelist infrastructure IPs (prevent banning our own nodes) ---
 
@@ -225,6 +166,7 @@
   ansible.builtin.file:
     path: /etc/systemd/system/crowdsec.service.d/memory-limit.conf
     state: absent
+  register: _crowdsec_legacy_unit
   notify: "Перезапустить CrowdSec"
 
 - name: "Создать каталог переопределений systemd для CrowdSec"
@@ -243,6 +185,7 @@
       # Keep 64 MiB outside it, rather than forcing hot pages out at small caps.
       Environment=GOMEMLIMIT={{ [(mem_crowdsec_mb | int * 0.65) | int, mem_crowdsec_mb | int - 64] | min }}MiB
       MemoryMax={{ mem_crowdsec_mb }}M
+  register: _crowdsec_unit
   notify: "Перезапустить CrowdSec"
 
 - name: "Создать каталог переопределений systemd для bouncer CrowdSec"
@@ -259,11 +202,13 @@
       [Service]
       Environment=GOMEMLIMIT={{ (mem_crowdsec_bouncer_mb | int * 0.65) | int }}MiB
       MemoryMax={{ mem_crowdsec_bouncer_mb | default(24) }}M
+  register: _crowdsec_bouncer_unit
   notify: "Перезапустить bouncer CrowdSec"
 
 - name: "Перечитать конфигурацию systemd после настройки CrowdSec"
   ansible.builtin.systemd:
     daemon_reload: true
+  when: _crowdsec_legacy_unit.changed or _crowdsec_unit.changed or _crowdsec_bouncer_unit.changed
 
 # --- Enable and start services ---
 
@@ -278,3 +223,32 @@
     name: crowdsec-firewall-bouncer
     state: started
     enabled: true
+
+# Hub metadata is not runtime configuration. Only changed active files require
+# applying the engine; a successful catalog download alone never restarts it.
+- name: "Разместить синхронизацию Hub CrowdSec"
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/scripts/sync-crowdsec-hub.py"
+    dest: /usr/local/sbin/aiproxy-crowdsec-hub
+    mode: '0755'
+
+- name: "Синхронизировать Hub CrowdSec при истечении срока или дрейфе правил"
+  vars:
+    _crowdsec_effective_config: "{{ (_crowdsec_base_config.content | b64decode | from_yaml) | combine(_crowdsec_local_config, recursive=true) }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['/usr/local/sbin/aiproxy-crowdsec-hub', '--interval', crowdsec_hub_update_interval | string,
+          '--database', _crowdsec_effective_config.db_config.db_path | default('') | string]
+         + (['--force'] if crowdsec_hub_force_update | bool or _crowdsec_packages.changed else []) }}
+  register: _crowdsec_hub_sync
+  changed_when: (_crowdsec_hub_sync.stdout | default('{"changed":false}', true) | from_json).changed | bool
+  retries: 3
+  delay: 10
+  until: _crowdsec_hub_sync.rc == 0
+  when: not ansible_check_mode
+  notify: "Перезапустить CrowdSec"
+
+# Apply and acknowledge before leaving the role. A failed/interrupted apply is
+# remembered by the synchronizer and retried even while the Hub cache is fresh.
+- name: "Применить ожидающие изменения CrowdSec до завершения роли"
+  ansible.builtin.meta: flush_handlers

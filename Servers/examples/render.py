@@ -200,7 +200,10 @@ def build(output):
         'http {', '    include /etc/nginx/conf.d/*.conf;', '}',
         'stream {', '    include /etc/nginx/stream.d/*.conf;', '}', '']),
         original='roles/nginx/tasks/main.yml', label='Самостоятельный пример базового nginx.conf; пакетные и чужие настройки не копируются.')
-    for target, origin in (('/usr/local/sbin/aiproxy-apply-shared-ports', 'scripts/apply-shared-ports.py'),):
+    for target, origin in (
+        ('/usr/local/sbin/aiproxy-apply-shared-ports', 'scripts/apply-shared-ports.py'),
+        ('/usr/local/sbin/aiproxy-crowdsec-hub', 'scripts/sync-crowdsec-hub.py'),
+    ):
         add(target, source_file=origin, original=origin)
     add('/etc/shared-host/aiproxy-firewall-backend', content="{{ 'ufw' if proxy_role == 'access' else 'nftables' }}\n",
         original='playbook.yml', label='Вариант UFW на access, nftables на upstream; iptables приведён как альтернатива.')

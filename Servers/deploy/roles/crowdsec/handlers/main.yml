@@ -1,8 +1,6 @@
 ---
 - name: "Перезапустить CrowdSec"
-  ansible.builtin.systemd:
-    name: crowdsec
-    state: restarted
+  ansible.builtin.include_tasks: "{{ role_path }}/tasks/apply.yml"
 
 - name: "Перезапустить bouncer CrowdSec"
   ansible.builtin.systemd:

@@ -406,6 +406,13 @@
     "note": ""
   },
   {
+    "file": "usr/local/sbin/aiproxy-crowdsec-hub",
+    "target": "/usr/local/sbin/aiproxy-crowdsec-hub",
+    "source": "scripts/sync-crowdsec-hub.py",
+    "when": "true",
+    "note": ""
+  },
+  {
     "file": "shared-host/aiproxy-firewall-backend",
     "target": "/etc/shared-host/aiproxy-firewall-backend",
     "source": "playbook.yml",

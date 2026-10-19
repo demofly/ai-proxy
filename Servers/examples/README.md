@@ -63,7 +63,7 @@ access адрес соседа будет `203.0.113.1:80` вместо `203.0.1
 | `crowdsec/` | Источники журналов, whitelist узлов и локальное ограничение SQLite; штатного обнаружения перебора Squid по 407 нет |
 | `systemd/system/` | Общий `aiproxy.slice`, индивидуальные ограничения служб, mtg, healthcheck и таймер, интеграция общих портов |
 | `resources.json` | Расчёт памяти: 380 МиБ на access с VRRP, 400 МиБ на upstream; минимумы служб выше RAM/3, предел 1 ГБ и резерв ОС соблюдены |
-| `usr/local/sbin/` | Проверка готовности Squid с cooldown и скрипт применения контракта общих портов |
+| `usr/local/sbin/` | Проверка Squid с cooldown, применение контракта общих портов и синхронизация CrowdSec Hub по сроку/дрейфу с подтверждением применения |
 | `keepalived.conf`, `keepalived/check_and_restart_squid.sh` | Необязательный VRRP; его проверка использует тот же healthcheck, что и таймер |
 | `nftables.conf`, `shared-host/matrix-ports.nft` | Вариант upstream с nftables; файл Matrix изначально содержит `return`, соседний проект дополняет его сам |
 | `iptables/`, `systemd/system/aiproxy-firewall.service` | Альтернативный upstream backend iptables/ip6tables; не применяется одновременно с вариантом nftables |
