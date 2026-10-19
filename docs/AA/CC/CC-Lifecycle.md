@@ -48,7 +48,7 @@
 | Артефакт | Тип | Статус | Дата | Зависимости |
 |---|---|---|---|---|
 | [C2-CN-001](../C2/C2-CN-001.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-001, C3-SA-001, C3-SU-001, C3-KA-001, C3-CS-001, C3-NX-001, C3-MT-001, C3-AD-001 |
-| [C2-CN-002](../C2/C2-CN-002.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-001, C3-NX-001, C3-CS-001 |
+| [C2-CN-002](../C2/C2-CN-002.md) | Детальный C2 | verified | 2026-10-19 | C1-BC-001, C3-NX-001, C3-CS-001 |
 | [C2-FR-001](../C2/C2-FR-001.md) | Детальный C2 | verified | 2026-10-19 | C1-BC-001, C1-BC-003, C3-SA-001, C3-SU-001 |
 | [C2-FR-002](../C2/C2-FR-002.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-002, C2-FR-001, C3-SA-001 |
 | [C2-FR-003](../C2/C2-FR-003.md) | Детальный C2 | verified | 2026-08-29 | C1-BC-003, C3-SA-001 |
@@ -117,7 +117,7 @@
 | [TD-Logs](../TD/TD-Logs.md) | Представление TD | verified | 2026-08-29 | -- |
 | [TD-Matrices](../TD/TD-Matrices.md) | Представление TD | verified | 2026-10-19 | -- |
 | [TD-Metrics](../TD/TD-Metrics.md) | Представление TD | verified | 2026-08-29 | -- |
-| [TD-Shared](../TD/TD-Shared.md) | Представление TD | verified | 2026-08-29 | -- |
+| [TD-Shared](../TD/TD-Shared.md) | Представление TD | verified | 2026-10-19 | -- |
 | [TD-TA](../TD/TD-TA.md) | Представление TD | verified | 2026-08-29 | -- |
 | [TD-VP](../TD/TD-VP.md) | Представление TD | verified | 2026-08-29 | -- |
 

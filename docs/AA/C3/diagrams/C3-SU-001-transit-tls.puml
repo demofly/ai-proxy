@@ -11,7 +11,7 @@ participant "nginx\nмаршрутизатор :443" as ROUTER
 participant "nginx\nтерминатор :4444" as TERM
 participant "Squid\nupstream-узла" as SQUID
 
-== Ветка А: Squid слушает сам (MTProxy выключен) ==
+== Ветка А: Squid слушает сам (без nginx и MTProxy) ==
 
 ACC -> SQUID : TLS на proxy_port\n(https_port с сертификатом участка)
 note right of ACC
@@ -23,13 +23,13 @@ end note
 SQUID -> SQUID : снятие TLS,\nразбор CONNECT
 SQUID --> ACC : 200 Connection Established
 
-== Ветка Б: Squid за маршрутизатором (MTProxy включён) ==
+== Ветка Б: Squid за маршрутизатором (независимо от MTProxy) ==
 
 ACC -> ROUTER : TLS на :443,\nимя участка в SNI
 ROUTER -> ROUTER : чтение имени без терминации\n(ssl_preread)
 ROUTER -> TERM : по записи карты имён\nsni-map.d/squid.conf
 TERM -> TERM : снятие TLS
-TERM -> SQUID : разобранный CONNECT,\nадрес клиента протоколом PROXY
+TERM -> SQUID : разобранный CONNECT,\nновый PROXY от loopback\nбез исходного IP клиента
 SQUID --> TERM : 200 Connection Established
 TERM --> ROUTER : ответ в TLS участка
 ROUTER --> ACC : 200 Connection Established
@@ -40,8 +40,8 @@ note over ACC, SQUID
   сквозным шифрованием клиента с сервисом независимо от него.
   Без шифрования участка наблюдателю между узлами виден адресат.
 
-  Порт назначения выбирает сторона access по устройству
-  принимающего узла: 443 при маршрутизаторе, иначе proxy_port.
+  Порт назначения всегда proxy_port принимающего узла:
+  443 за общим router; настраивается для прямого Squid.
 end note
 
 @enduml

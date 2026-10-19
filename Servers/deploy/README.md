@@ -9,47 +9,39 @@ DNS, firewall и systemd: [Servers/examples](../examples/README.md).
 
 ## Структура
 
-```
+```text
 deploy/
-├── inventory.yml.sample        # Образец инвентаря (отслеживается)
-├── inventory.yml                # Рабочий инвентарь — НЕ отслеживается (.gitignore)
-├── playbook.yml                 # Основной playbook
-├── passwd.example               # Образец файла пользователей (отслеживается)
-├── passwd                       # Рабочий файл пользователей — НЕ отслеживается
-├── templates/
-│   ├── squid-access.conf.j2     # Шаблон Squid для access
-│   ├── squid-upstream.conf.j2   # Шаблон Squid для upstream
-│   ├── keepalived.conf.j2       # Шаблон Keepalived для access
-│   ├── check_and_restart_squid.sh.j2  # Health-check скрипт для keepalived
-│   ├── nftables-upstream.conf.j2      # Шаблон nftables для upstream (Debian)
-│   └── iptables-upstream.rules.j2     # Набор правил цепочки SQUID-PROXY (Ubuntu/RHEL)
+├── inventory.yml.sample        # Полный публичный образец параметров
+├── inventory.yml               # Рабочий inventory, исключён из Git
+├── passwd.example              # Публичный образец пользователей
+├── passwd                      # Рабочие хеши паролей, исключены из Git
+├── playbook.yml                # Preflight, ресурсы, порядок настройки служб
+├── templates/                  # Squid, общий SNI router, firewall, health, slice
+├── tasks/
+│   ├── ports.yml               # Диапазоны портов, общий 443, конфликты слушателей
+│   ├── squid-apply.yml          # Применение Squid с учётом параметров запуска
+│   ├── mtproxy-cluster.yml      # Общий секрет без неявной ротации
+│   ├── health.yml              # Healthcheck и таймер
+│   ├── shared-firewall.yml     # Контракт портов соседнего Matrix
+│   └── resource-limits.yml     # Slice, индивидуальные пределы и OOM recovery
+├── filter_plugins/             # План памяти, состав MTProxy/ACME
 ├── roles/
-│   ├── dns_resolver/            # Кеширующий DNS-резолвер (unbound)
-│   │   ├── templates/unbound.conf.j2
-│   │   ├── tasks/main.yml
-│   │   ├── handlers/main.yml
-│   │   └── defaults/main.yml
-│   ├── nginx/                   # nginx SNI router (access nodes)
-│   │   ├── templates/
-│   │   │   ├── 00-sni-router.conf.j2        # Shared SNI router (port 443)
-│   │   │   ├── 10-aiproxy-upstreams.conf.j2  # MTProxy relay + upstream definitions
-│   │   │   └── sni-map.d/aiproxy.conf.j2     # SNI entries: MTProxy domains
-│   │   └── tasks/main.yml
-│   ├── mtproxy/                 # MTProxy + upstream nginx (upstream nodes)
-│   │   ├── templates/
-│   │   │   ├── 00-sni-router.conf.j2         # Shared SNI router (upstream)
-│   │   │   ├── nginx-mtproxy-stream.conf.j2  # MTProxy TLS 1.3 terminator
-│   │   │   ├── nginx-squid-tls-term.conf.j2  # Терминатор TLS участка access → upstream
-│   │   │   ├── sni-map.d/mtproxy.conf.j2     # SNI entries: MTProxy hostname
-│   │   │   ├── sni-map.d/squid.conf.j2       # Запись карты имён для терминатора участка
-│   │   │   ├── mtg.toml.j2                   # mtg daemon config
-│   │   └── tasks/main.yml
-│   └── crowdsec/                # CrowdSec IPS
-│       ├── tasks/main.yml
-│       └── templates/whitelist-infrastructure.yaml.j2
-├── MTProxy.md                   # MTProxy configuration reference
+│   ├── nginx/                  # Access: SNI, HTTPS/ACME и MTProxy relay
+│   ├── mtproxy/                # Upstream: общий nginx/Squid TLS; mtg опционален
+│   │   └── tasks/daemon.yml    # Настройка mtg только при mtproxy_enabled=true
+│   ├── dns_resolver/           # Unbound
+│   └── crowdsec/               # CrowdSec, bouncer и собственные источники логов
+├── scripts/                    # Применение контракта общих портов
+├── tests/                      # Проверки preflight и реальные nginx/Squid туннели
+├── diagrams/                   # Исходник PlantUML и готовый SVG
+├── MTProxy.md
 └── README.md
 ```
+
+Общие шаблоны `00-sni-router.conf.j2` и `10-aiproxy-capacity.conf.j2`
+находятся в `deploy/templates/`; обе роли используют именно их.
+Конечные конфиги с путями установки перечислены в
+[манифесте примеров](../examples/manifest.json).
 
 ## Требования
 
@@ -273,10 +265,10 @@ access без доверенного материала при прогоне, �
 
 | Устройство upstream | Кто принимает TLS | Порт, к которому обращается access |
 |---|---|---|
-| MTProxy выключен | сам Squid (`https_port`) | `proxy_port` |
-| MTProxy включён | nginx-терминатор за маршрутизатором SNI | 443 |
+| Без nginx: `behind_nginx: false`, MTProxy выключен | сам Squid (`https_port`) | `proxy_port` |
+| За nginx: `behind_nginx: true` либо включён MTProxy | nginx-терминатор за маршрутизатором SNI | `proxy_port`, обязательно 443 |
 
-Во второй ветке маршрутизатор разбирает имя из SNI и направляет соединение
+Настройка терминатора Squid не зависит от включения Telegram. Во второй ветке маршрутизатор разбирает имя из SNI и направляет соединение
 локальному терминатору (`squid_tls_term_port`, по умолчанию 4444), тот снимает TLS
 и передаёт поток Squid с новым PROXY-заголовком от loopback. Входной адрес
 access-узла проверяется терминатором, исходный IP клиента в Squid намеренно
@@ -490,7 +482,7 @@ htpasswd -B -C 12 -bn пользователь пароль >> passwd
 
 | Переменная | Описание | По умолчанию |
 |------------|----------|--------------|
-| `proxy_port` | Внешний порт прокси: nginx на 443 либо прямой вход Squid без nginx | 443 (обе группы в образце инвентаря) |
+| `proxy_port` | Внешний порт: за nginx обязательно 443; без nginx — настраиваемый порт прямого Squid | 443 (обе группы в образце инвентаря) |
 | `squid_upstream_hosts` | Непустой список имён из группы upstreams без повторов; переопределяется для конкретного access, определяет его родителей Squid | Вся группа upstreams |
 | `enable_auth` | Включить аутентификацию | true (access) |
 | `enable_logging` | Включить журналирование | true (access) |
@@ -555,7 +547,7 @@ htpasswd -B -C 12 -bn пользователь пароль >> passwd
 | `keepalived_vip_prefix` | Длина префикса виртуального адреса | 24 |
 | `keepalived_restart_cooldown` | Пауза между попытками перезапуска Squid проверкой работоспособности | 30 (секунд) |
 | `behind_nginx` | Ручное переопределение: Squid за nginx | не задана (автоопределение) |
-| `squid_local_port` | Локальный порт Squid при работе за nginx | 3128 |
+| `squid_local_port` | Loopback-порт Squid, общий для SNI fallback и TLS-терминаторов | 3128 |
 | `crowdsec_enabled` | Включить CrowdSec IPS | true |
 | `crowdsec_memory_mb` | Устаревшее имя явного предела CrowdSec, МиБ; предпочтительно `proxy_memory_limits.crowdsec` | автоматически, минимум 192 |
 | `crowdsec_fw_bouncer_memory_mb` | Устаревшее имя явного предела bouncer, МиБ; предпочтительно `proxy_memory_limits.crowdsec_bouncer` | автоматически, минимум 24 |
@@ -681,40 +673,60 @@ dig +tcp +time=3 +tries=1 @<upstream-ip> example.com
 
 ### Access nodes
 
-nginx выполняет SNI-based маршрутизацию на порту 443 с `ssl_preread` (без TLS-терминации). Squid слушает на localhost:3128 за nginx и использует plain HTTP cache_peer к upstream Squid на порту 80.
+Публичный SNI router слушает общий 443 и передаёт исходный TLS-поток выбранному
+локальному обработчику. Сам router TLS не завершает. При включённом
+`https_proxy_enabled` отдельный терминатор принимает клиентский TLS 1.2/1.3
+на loopback:4445 и передаёт HTTP CONNECT в Squid. Прямой HTTP-прокси остаётся
+доступен через fallback того же публичного порта.
 
+```text
+Client → nginx:443 (ssl_preread + PROXY protocol)
+            ├─ SNI=proxy.example.com → HTTPS term :4445 → Squid :3128
+            ├─ SNI=max.ru / tgproxy.example.com → MTProxy relay :9443
+            │     └─ TLS 1.3 → upstream:443 → TLS term :4443 → mtg :2083
+            └─ plain HTTP CONNECT → fallback Squid :3128
+
+Squid access → cache_peer upstream:proxy_port
+            ├─ squid_transit_tls=true → TLS с проверкой имени transit.internal
+            └─ squid_transit_tls=false → HTTP CONNECT без TLS участка
 ```
-Client → nginx:443 (access, ssl_preread + PROXY protocol)
-            ├─ SNI=max.ru / tgproxy.example.com → MTProxy relay
-            │     └─ TLS 1.3 relay (proxy_ssl) → upstream:443
-            └─ Default → localhost:3128 (Squid, PROXY protocol)
-                  └─ cache_peer (plain HTTP) → upstream:80 (Squid)
-```
+
+HTTPS-вход и шифрование участка включаются независимо и явно; оба по умолчанию
+выключены. Порт 443 сам по себе не означает HTTPS-прокси. TLS целевого сайта
+внутри CONNECT остаётся сквозным между клиентом и сайтом.
 
 ### Upstream nodes
 
-При `behind_nginx: true` (значение в образце инвентаря) единственная точка входа — nginx:443. Он же маршрутизирует MTProxy по SNI, а весь прочий трафик отдаёт локальному Squid на `127.0.0.1:3128`.
+За nginx внешний порт `proxy_port` равен 443. В отличие от локальных портов,
+этот порт фиксирован контрактом совместного размещения. Preflight проверяет его
+до установки пакетов; `squid_local_port` согласованно меняет fallback и назначения
+локальных терминаторов. Порты всех включённых слушателей должны различаться.
 
+```text
+Access → upstream nginx:443 (ssl_preread + PROXY protocol)
+            ├─ SNI=transit.internal → Squid TLS term :4444 → Squid :3128
+            ├─ SNI=max.ru / tgproxy.example.com → MTProxy TLS term :4443 → mtg :2083
+            └─ plain HTTP CONNECT → fallback Squid :3128
+Squid upstream → целевой сайт
 ```
-                            ┌─ nginx:443 (ssl_preread + PROXY protocol)
-Access nodes ──┤            │     ├─ SNI=max.ru / <mtproxy_hostname, если задан> → MTProxy TLS terminator (:4443)
-               │            │     │       └─ TLS 1.3 termination → mtg daemon (:2083)
-               │            │     │
-               └────────────┘     └─ SNI пуст (plain HTTP от access Squid) → default
-                                        └─ fallback_squid → Squid 127.0.0.1:3128
-                                              └─ Выход в интернет
-```
 
-`ssl_preread` не находит ClientHello в plain-HTTP соединении, поэтому `$ssl_preread_server_name` пуст и срабатывает `default fallback_squid` из общей SNI-карты. Squid принимает такое соединение только с `require-proxy-header`, а реальный IP клиента приходит от nginx через PROXY protocol.
+Squid TLS-терминатор работает и с выключенным MTProxy. Он разрешает соединения
+только с адресов access, но заново создаёт PROXY-заголовок от loopback:
+исходный клиентский IP намеренно не восстанавливается. На access IP клиента
+восстанавливается для локальной проверки доступа и журналирования.
 
-При `behind_nginx: false` Squid слушает `proxy_port` напрямую, а nginx на upstream не нужен вовсе.
+При `behind_nginx: false` и выключенном MTProxy прямой Squid принимает
+`proxy_port` самостоятельно: HTTP при выключенном transit TLS, HTTPS при включённом.
+Этот режим требует свободного внешнего порта; общий nginx на нём не используется.
 
-**Ключевые характеристики:**
-- **Единый порт на upstream**: nginx :443 — и MTProxy по SNI, и цепочка Squid по умолчанию
-- **TLS cache_peer по явному включению**: `squid_transit_tls: true` включает проверку сертификата и SNI `transit.internal`; без параметра CONNECT передаётся без шифрования участка.
-- **PROXY protocol**: nginx на access пробрасывает реальный IP клиента к локальному Squid
-- **TCP keepalive**: `proxy_socket_keepalive on` для обнаружения мёртвых соединений
-- **Таймауты**: router и терминатор Squid — не менее 3900s, выше `read_timeout` Squid; MTProxy-реле — 360s, выше 300s простоя mtg
+Для двух IP одного HTTPS-имени на access используются отдельные HTTP-01 vhost на
+80/tcp. Локальный токен имеет приоритет, отсутствующий запрашивается у соседа с
+ограничением одного перехода. Каждый access самостоятельно выпускает и продлевает
+свой сертификат; приватные ключи между узлами не копируются.
+
+**Таймауты:** Squid — `read_timeout` (по умолчанию час простоя), router и
+Squid/HTTPS-терминаторы — не менее 3900 секунд; MTProxy relay/терминатор —
+360 секунд при пределе простоя mtg 300 секунд. TCP keepalive включён.
 
 ### Upstream прокси (Squid cache_peer)
 
@@ -864,63 +876,54 @@ tg://proxy?server=203.0.113.1&port=443&secret=<hex-секрет>
 
 ## Совместное развёртывание с Matrix
 
-AI Assistants Proxy поддерживает co-deployment на одном сервере с проектом [Matrix Synapse Homeserver](https://github.com/Organization/Matrix). При совместном развёртывании AI Assistants Proxy работает как **primary** (первичное развёртывание), владея shared resources (port 443, CrowdSec, firewall), а Matrix адаптируется как **secondary**.
+ai-proxy владеет общим nginx, SNI router на 443, бюджетом общего процесса nginx,
+CrowdSec/bouncer и интеграцией firewall. Соседний Matrix добавляет файлы под своим
+префиксом и собственные правила; его конфиги ai-proxy не переписывает.
 
-**Архитектура co-deployment:**
+```text
+Internet → nginx:443 (общий SNI router)
+             ├─ proxy.example.com → HTTPS term :4445 → Squid :3128 → upstream:443
+             ├─ max.ru → MTProxy relay :9443 → upstream:443
+             ├─ matrix.example.com → обработчик Matrix на loopback
+             └─ plain HTTP CONNECT → Squid :squid_local_port → upstream:proxy_port
 
-```
-Internet → AI Proxy nginx :443 (stream SNI routing, ssl_preread, PROXY protocol)
-                ├─ SNI=max.ru → MTProxy relay (TLS 1.3) → upstream:443
-                ├─ SNI=matrix.example.com → Matrix nginx (localhost:8443)
-                └─ default → Squid (localhost:3128)
-                      └─ cache_peer (plain HTTP) → upstream:80
-
-CrowdSec IPS ← AI Proxy (owner) + Matrix (collections-only)
-              └─ nginx logs: both AI Proxy and Matrix
-              └─ firewall bouncer: managed by AI Proxy
-
-UFW Firewall ← AI Proxy (reset + policies) + Matrix (additive rules)
+CrowdSec ← собственные acquis.d-файлы каждого проекта
+Firewall ← правила ai-proxy + контракт общих портов Matrix
 ```
 
-**Роли и ответственность:**
+| Объект | Владелец и изменение |
+|---|---|
+| `nginx.conf`, `stream.d/00-sni-router.conf` | ai-proxy поддерживает общие worker/include и перезаписывает свой router; сосед добавляет собственные фрагменты |
+| `stream.d/sni-map.d/*.conf`, `stream.d/*.conf`, `conf.d/*.conf` | Каждый проект управляет собственными файлами; имя SNI должно быть уникальным |
+| CrowdSec/bouncer | ai-proxy задаёт общий бюджет и службы; источники журналов разделены по `acquis.d/` |
+| UFW | Настраиваются отдельные правила и политики; полного reset нет |
+| nftables | Заменяются только управляемые цепочки и наборы внутри общей таблицы; таблицы CrowdSec и чужие объекты сохраняются |
+| iptables/ip6tables | Собственные цепочки и восстановление с `--noflush`; остальные правила сохраняются |
+| Порты Matrix | Сосед публикует контракт в `/etc/shared-host/`; ai-proxy применяет его в действующий backend |
 
-| Компонент | AI Assistants Proxy (primary) | Matrix (secondary) |
-|---|---|---|
-| **nginx port 443** | Владелец — stream SNI routing | Адаптируется — слушает только localhost:8443 |
-| **CrowdSec** | Владелец — установка, systemd, firewall bouncer | Адаптируется — добавляет collections + nginx logs |
-| **UFW** | Владелец — reset, default policies | Адаптируется — добавляет правила (8448, TURN, LiveKit) |
-| **Squid** | Владелец — localhost:3128 (за nginx) | Не используется |
-| **MTProxy** | Владелец — upstream:2083 + nginx routing | Не используется |
-| **unbound** | Владелец — DNS resolver на всех нодах | Может использовать localhost:53 |
+Состав файлов для расширенного TLS-сценария:
 
-**Модульная архитектура (Composable Stream Configuration):**
+```text
+# Access: /etc/nginx/
+conf.d/aiproxy-https-acme.conf             # HTTP-01, включая второй access
+stream.d/00-sni-router.conf               # Общий слушатель 443
+stream.d/10-aiproxy-capacity.conf          # Зона лимита транзитных сессий
+stream.d/10-aiproxy-upstreams.conf         # MTProxy relay
+stream.d/11-aiproxy-https-proxy.conf       # HTTPS term :4445
+stream.d/sni-map.d/aiproxy.conf           # MTProxy
+stream.d/sni-map.d/aiproxy-https-proxy.conf
+stream.d/sni-map.d/<префикс-Matrix>.conf   # Принадлежит соседу
 
-Оба проекта используют модульную архитектуру nginx stream. Каждый проект управляет только своими файлами, общий SNI router создаётся первым задеплоенным проектом (`force: no`).
-
+# Upstream: /etc/nginx/
+stream.d/00-sni-router.conf
+stream.d/10-aiproxy-capacity.conf
+stream.d/10-mtproxy-tls.conf               # Только при включённом MTProxy
+stream.d/20-squid-tls-term.conf            # При включённом Squid transit TLS
+stream.d/sni-map.d/mtproxy.conf            # Только при включённом MTProxy
+stream.d/sni-map.d/squid.conf              # При включённом Squid transit TLS
 ```
-# Access nodes:
-/etc/nginx/stream.d/
-  00-sni-router.conf              # Shared: map + listen 443 + ssl_preread + proxy_protocol
-  10-aiproxy-upstreams.conf       # ai-proxy: MTProxy relay (TLS 1.3 to upstream)
-  sni-map.d/
-    aiproxy.conf                  # ai-proxy: max.ru/tgproxy.example.com → MTProxy
-    matrix.conf                   # Matrix: matrix.example.com → Matrix nginx (co-deployment)
 
-# Upstream nodes:
-/etc/nginx/stream.d/
-  00-sni-router.conf              # Shared: map + listen 443 + ssl_preread + proxy_protocol
-  10-mtproxy-tls.conf             # MTProxy TLS 1.3 terminator (:4443 → mtg :2083)
-  sni-map.d/
-    mtproxy.conf                  # tgproxy.example.com → mtproxy_tls_term
-```
-
-Никаких ручных правок конфигов не требуется — при деплое Matrix на тот же хост, Matrix автоматически добавит свои upstream и SNI маппинги.
-
-**Изоляция трафика:**
-
-Оба проекта изолированы на уровне L4 (stream SNI routing):
-- Matrix трафик (SNI = matrix.example.com) → Matrix nginx :8443
-- MTProxy трафик (SNI = max.ru/tgproxy.example.com) → MTProxy relay → upstream:443 (TLS 1.3)
-- AI Proxy трафик (default) → Squid :3128 → upstream:80 (plain HTTP)
-
-CrowdSec защищает оба проекта единым набором правил и TI-фидов.
+Список показывает условные компоненты: выключенные HTTPS, ACME, MTProxy или transit
+TLS не требуют соответствующих файлов. Общий router сам TLS не завершает;
+это делают отдельные локальные терминаторы. Перечитывание nginx выполняется
+без общего принудительного завершения старых worker и без разрыва чужих сессий.

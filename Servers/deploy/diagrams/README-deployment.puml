@@ -1,7 +1,7 @@
 @startuml
 !theme plain
 top to bottom direction
-title Архитектура AI Assistants Proxy — Deployment
+title AI Proxy — HTTPS и transit TLS включены, MTProxy и VRRP опциональны
 
 skinparam node {
     BackgroundColor #F5F5F5
@@ -41,6 +41,8 @@ rectangle "Access Nodes" as access_zone #F0F8FF {
     node "access01.example.com\n203.0.113.1" as access01 {
         component "nginx :443" as acc_nginx #DDEEFF {
         }
+        component "HTTPS term :4445" as acc_https #DDEEFF
+        component "ACME HTTP :80" as acc_acme #DDEEFF
         component "Squid :3128" as acc_squid #DDEEFF
         component "unbound :53" as acc_dns #FFF8DC
         component "Keepalived\nVRRP" as acc_ka #FFE0E0
@@ -49,6 +51,8 @@ rectangle "Access Nodes" as access_zone #F0F8FF {
 
     node "access02.example.com\n203.0.113.2" as access02 {
         component "nginx :443" as acc2_nginx #DDEEFF
+        component "HTTPS term :4445" as acc2_https #DDEEFF
+        component "ACME HTTP :80" as acc2_acme #DDEEFF
         component "Squid :3128" as acc2_squid #DDEEFF
         component "unbound :53" as acc2_dns #FFF8DC
         component "Keepalived\nVRRP" as acc2_ka #FFE0E0
@@ -57,8 +61,10 @@ rectangle "Access Nodes" as access_zone #F0F8FF {
 
 rectangle "Upstream Nodes" as upstream_zone #F5FFF0 {
     node "upstream01.example.com\n198.51.100.11" as upstream01 {
-        component "nginx :443\n(MTProxy only)" as up_nginx #D4EDDA
-        component "Squid :80" as up_squid #D4EDDA
+        component "nginx SNI router :443" as up_nginx #D4EDDA
+        component "Squid TLS term :4444" as up_tls #D4EDDA
+        component "MTProxy TLS term :4443" as up_mt_tls #D4EDDA
+        component "Squid :3128" as up_squid #D4EDDA
         component "mtg :2083" as up_mtg #D4EDDA
         component "unbound\n127.0.0.1:53\n+ ext:53" as up_dns #FFF8DC
         component "CrowdSec" as up_cs #FFE0E0
@@ -67,14 +73,19 @@ rectangle "Upstream Nodes" as upstream_zone #F5FFF0 {
 
 ' === Squid proxy chain (blue) ===
 user -[#4169E1,bold]-> acc_nginx : HTTPS\n(CONNECT)
-acc_nginx -[#4169E1]-> acc_squid : PROXY\nprotocol\ndefault SNI
-acc_squid -[#4169E1,bold]-> up_squid : plain HTTP\nport 80\ncache_peer
+acc_nginx -[#4169E1]-> acc_https : SNI=proxy.example.com
+acc_https -[#4169E1]-> acc_squid : TLS 1.2/1.3 term\nPROXY protocol
+acc_nginx -[#4169E1,dashed]-> acc_squid : fallback HTTP CONNECT
+acc_squid -[#4169E1,bold]-> up_nginx : cache_peer TLS :443\nSNI=transit.internal\nпроверка сертификата
+up_nginx -[#4169E1]-> up_tls : TLS 1.3
+up_tls -[#4169E1]-> up_squid : CONNECT + PROXY\nанонимный loopback
 up_squid -[#4169E1]-> aiapi : CONNECT\n(direct)
 
 ' === MTProxy chain (green) ===
 tguser -[#228B22,bold]-> acc_nginx : TLS :443\nSNI=tgproxy.example.com
 acc_nginx -[#228B22]-> up_nginx : TLS 1.3\nrelay :443
-up_nginx -[#228B22]-> up_mtg : TLS term\n:4443→:2083
+up_nginx -[#228B22]-> up_mt_tls : SNI=max.ru
+up_mt_tls -[#228B22]-> up_mtg : TLS 1.3 term\n:4443→:2083
 up_mtg -[#228B22]-> tgsrv : MTProto
 
 ' === DNS chain (orange) ===
@@ -85,7 +96,10 @@ up_dns -[#FF8C00,dashed]-> pubdns : plain DNS
 
 ' === Second access node (simplified) ===
 user -[#4169E1,dotted]-> acc2_nginx
-acc2_squid -[#4169E1,dotted]-> up_squid
+acc2_nginx -[#4169E1]-> acc2_https
+acc2_https -[#4169E1]-> acc2_squid
+acc2_squid -[#4169E1,dotted]-> up_nginx : cache_peer TLS :443
+acc_acme <.[#666666].> acc2_acme : HTTP-01 fallback :80\nодин переход, отдельные ключи
 
 ' Keepalived
 acc_ka .[#8B0000].> acc2_ka : VRRP

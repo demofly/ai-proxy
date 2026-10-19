@@ -22,13 +22,16 @@ package "Точки расширения (каталоги)" as EXT {
 
 component "Squid\nбэкенд по умолчанию" as SQUID
 component "терминатор TLS участка\n:4444" as TERM
-component "терминатор MTProxy" as MTG
+component "терминатор MTProxy\nupstream :4443" as MTG
+component "клиентский HTTPS\naccess :4445" as HTTPS
 component "файлы соседнего проекта" as NEIGH #E8F5E9
 
 CONF -[#191970]-> ROUTER : пределы соединений\nи дескрипторов
 ROUTER -[#0066CC]-> MAPD : включает карту имён
 ROUTER -[#0066CC]-> ROUTERD : включает вставки
-ROUTER -[#009933]-> SQUID : имя не совпало —\nбэкенд по умолчанию
+ROUTER -[#009933]-> SQUID : fallback HTTP CONNECT\nsquid_local_port (3128)
+ROUTER -[#009933]-> HTTPS : https_proxy_hostname\n(если HTTPS включён)
+HTTPS --> SQUID : TLS term + PROXY\nтолько на access
 ROUTER -[#009933]-> TERM : имя участка\n(squid_tls_sni)
 ROUTER -[#009933]-> MTG : имя маскировки MTProxy
 ROUTER -[#CC6600]-> LOG : адрес клиента, имя SNI,\nадрес назначения, код, объём

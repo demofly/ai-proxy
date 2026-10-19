@@ -1,40 +1,34 @@
 @startuml ADR-000003-sni-routing
 !theme plain
-skinparam backgroundColor #FEFEFE
 skinparam defaultFontName "Segoe UI"
-skinparam defaultFontSize 11
+title Access SNI routing — отдельная терминация HTTPS и HTTP fallback
+participant "Клиент\nпрокси" as CLIENT
+participant "nginx router\nобщий :443" as ROUTER
+participant "HTTPS term\nloopback :4445" as HTTPS
+participant "Squid access\nsquid_local_port (3128)" as SQUID
+participant "MTProxy relay\nloopback :9443" as RELAY
 
-title SNI-маршрутизация через nginx stream (L4)\n(access node)
-
-participant "Входящее\nTLS-соединение\n:443" as tls
-participant "nginx stream\n(ssl_preread)" as nginx
-participant "Squid Access\n127.0.0.1:3128" as squid
-participant "TLS Relay\n127.0.0.1:9443" as relay
-
-tls -> nginx : TLS ClientHello\n(SNI: api.anthropic.com)
-nginx -> nginx : ssl_preread on\n$ssl_preread_server_name\n= "api.anthropic.com"
-nginx -> nginx : map lookup:\ndefault → fallback_squid
-nginx -> squid : proxy_pass fallback_squid\n(PROXY protocol,\nбез расшифровки TLS)
-
-note over nginx, squid : End-to-end TLS сохраняется
-
-== Пример: Telegram (fake-TLS) ==
-
-tls -> nginx : TLS ClientHello\n(SNI: example.com)
-nginx -> nginx : ssl_preread on\n$ssl_preread_server_name\n= "example.com"
-nginx -> nginx : map lookup:\nexample.com → aiproxy_mtproxy
-nginx -> relay : proxy_pass aiproxy_mtproxy\n(→ TLS relay :9443)
-
-note over relay
-  TLS relay оборачивает поток
-  в TLS 1.3 (proxy_ssl on) и
-  пересылает на upstream :443
+== HTTPS-прокси (включается явно) ==
+CLIENT -> ROUTER : TLS ClientHello\nSNI=proxy.example.com
+ROUTER -> HTTPS : Исходный TLS + PROXY protocol
+HTTPS -> HTTPS : Терминация TLS 1.2/1.3\nсертификат публичного имени прокси
+HTTPS -> SQUID : HTTP CONNECT целевого сайта\nPROXY с IP клиента
+SQUID --> CLIENT : 200 Connection established\nчерез HTTPS term и router
+note over CLIENT, SQUID
+  Внутри CONNECT — сквозной TLS с целевым сайтом.
+  SNI внешнего TLS — имя прокси, не имя целевого сайта.
 end note
 
-== Пример: default (неизвестный SNI) ==
+== Обычный HTTP-прокси ==
+CLIENT -> ROUTER : HTTP CONNECT, без внешнего TLS
+ROUTER -> SQUID : fallback + PROXY protocol
+note over ROUTER, SQUID
+  Неизвестный TLS SNI тоже попадает в fallback,
+  но HTTP-слушатель Squid такой TLS не принимает.
+end note
 
-tls -> nginx : TLS ClientHello\n(SNI: unknown.com)
-nginx -> nginx : map lookup:\ndefault → fallback_squid
-nginx -> squid : proxy_pass fallback_squid
-
+== Telegram (fake-TLS) ==
+CLIENT -> ROUTER : fake-TLS, SNI=max.ru
+ROUTER -> RELAY : Исходный поток + PROXY protocol
+RELAY -> RELAY : Обёртка в TLS 1.3\nдо upstream:443, SNI=max.ru
 @enduml

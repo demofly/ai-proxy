@@ -4,7 +4,7 @@ skinparam backgroundColor #FEFEFE
 skinparam defaultFontName "Segoe UI"
 skinparam defaultFontSize 11
 
-title Сетевая топология и потоки трафика AI Assistants Proxy
+title Сетевая топология — сценарий с HTTPS и transit TLS
 
 ' --- Actors ---
 actor "Клиент\n(IDE/браузер)" as client
@@ -21,6 +21,8 @@ rectangle "Сеть Access Tier (РФ)" as access_net #E8F5E9 {
     portin "443/tcp" as p_443_a1
     portin "VRRP/112" as p_vrrp1
     component "nginx SNI Router" as nx1
+    component "HTTPS term :4445" as https1
+    component "ACME :80" as acme1
     component "Squid Access\nlocalhost:3128" as sa1
     component "TLS Relay\nlocalhost:9443" as relay1
     component "Keepalived" as ka1
@@ -32,6 +34,8 @@ rectangle "Сеть Access Tier (РФ)" as access_net #E8F5E9 {
     portin "443/tcp" as p_443_a2
     portin "VRRP/112" as p_vrrp2
     component "nginx SNI Router" as nx2
+    component "HTTPS term :4445" as https2
+    component "ACME :80" as acme2
     component "Squid Access\nlocalhost:3128" as sa2
     component "Keepalived" as ka2
     component "CrowdSec" as cs2
@@ -44,7 +48,9 @@ rectangle "Сеть Upstream Tier (вне РФ)" as upstream_net #E3F2FD {
 
   rectangle "Upstream Node 1" as un1 {
     portin "443/tcp" as p_443_u1
-    component "nginx SNI Router\n(MTProxy по имени,\nостальное → Squid)" as nx_u1
+    component "nginx SNI Router\n(SNI → TLS term,\nHTTP → Squid)" as nx_u1
+    component "Squid TLS term :4444" as transit_term
+    component "MTProxy TLS term :4443" as mt_term
     component "Squid Upstream\n127.0.0.1:3128 за nginx :443" as su1
     component "MTProxy (mtg)\nlocalhost:2083" as mt1
     component "Межсетевой экран\nUFW / nftables / цепочка iptables\n(выбор по состоянию ufw)" as nf1
@@ -65,10 +71,16 @@ cloud "CrowdSec API" as csapi
 client -[#2E7D32]-> vip : HTTPS proxy\n:443
 vip -[#2E7D32]-> p_443_a1 : TLS (SNI preread)
 p_443_a1 --> nx1
-nx1 -[#2E7D32]-> sa1 : default\nlocalhost:3128\n(PROXY protocol)
+nx1 -[#2E7D32]-> https1 : SNI=proxy.example.com
+https1 -[#2E7D32]-> sa1 : TLS 1.2/1.3 term\nPROXY protocol
+nx1 -[#2E7D32,dashed]-> sa1 : fallback HTTP CONNECT
+nx2 --> https2
+https2 --> sa2
+acme1 <.[#666666].> acme2 : HTTP-01 :80\nодин переход
 
-sa1 -[#1565C0]-> p_443_u1 : cache_peer\n:443 (userhash)
-nx_u1 --> su1 : бэкенд по умолчанию\n→ 127.0.0.1:3128
+sa1 -[#1565C0]-> p_443_u1 : cache_peer TLS :443\nSNI=transit.internal\nuserhash, проверка сертификата
+nx_u1 --> transit_term : SNI=transit.internal
+transit_term --> su1 : TLS 1.3 term\nPROXY от loopback
 
 su1 -[#E65100]-> ai : HTTPS :443\n(анонимный)
 
@@ -82,7 +94,8 @@ tg_client -[#0D47A1]-> vip : fake-TLS :443
 nx1 -[#0D47A1]-> relay1 : SNI route\n→ :9443
 relay1 -[#0D47A1]-> p_443_u1 : TLS 1.3\nupstream :443
 p_443_u1 --> nx_u1
-nx_u1 -[#0D47A1]-> mt1 : SNI route\n→ :2083
+nx_u1 -[#0D47A1]-> mt_term : SNI=max.ru
+mt_term -[#0D47A1]-> mt1 : TLS 1.3 term → :2083
 mt1 -[#E65100]-> tg : MTProto
 
 ' === Control plane (dashed) ===
@@ -95,7 +108,7 @@ ka1 .[#388E3C].> vip : управление VIP
 ka1 .[#388E3C].> sa1 : health check\n(сценарий проверки\nи перезапуска)
 
 ' CrowdSec
-cs1 .[#666666].> sa1 : парсинг access.log
+cs1 .[#666666].> nx1 : парсинг sni-router.log
 cs1 .[#666666].> csapi : HTTPS\n(scenarios, decisions)
 cs_u1 .[#666666].> csapi : HTTPS\n(scenarios, decisions)
 
@@ -119,5 +132,7 @@ legend right
   |<#388E3C> пунктир | Keepalived управление (control plane) |
   |<#666666> пунктир | CrowdSec / Firewall (control plane) |
 end legend
+
+note "HTTPS и transit TLS включены явно.\nБез transit TLS: HTTP CONNECT через fallback :443.\nVRRP необязателен; общий DNS может указывать на оба access." as MODE
 
 @enduml
