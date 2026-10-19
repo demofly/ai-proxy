@@ -85,15 +85,13 @@ http_port {{ proxy_port }} tcpkeepalive=60,10,30
 {% for upstream_host in squid_upstream_hosts | default(groups['upstreams']) %}
 {% set upstream = hostvars[upstream_host] %}
 {% if squid_transit_tls | default(false) | bool %}
-{#- Порт зависит от устройства принимающего узла: при включённом MTProxy там
-    работает маршрутизатор по имени SNI и слушает 443, разбирая имя и направляя
-    соединение к терминатору; иначе TLS принимает сам Squid на своём порту. -#}
-{% set transit_port = 443 if (upstream.mtproxy_enabled | default(false) | bool) else upstream.proxy_port %}
+{#- proxy_port — внешний порт принимающего узла: 443 за SNI router либо
+    настраиваемый порт прямого Squid. Не зависит от включения Telegram. -#}
 {#- tls-cafile задаёт доверенный якорь: сертификат участка, выпущенный развёртыванием.
     tls-no-default-ca отсекает системные удостоверяющие центры — доверять следует
     ровно одному сертификату, а не всякому, кем-либо подписанному.
     tls-domain задаёт имя в SNI и проверяемое имя принимающей стороны. -#}
-cache_peer {{ upstream.ansible_host }} parent {{ transit_port }} 0 no-query userhash tls tls-no-default-ca tls-cafile=/etc/squid/upstream-transit-ca.crt tls-domain={{ squid_tls_sni }} connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
+cache_peer {{ upstream.ansible_host }} parent {{ upstream.proxy_port }} 0 no-query userhash tls tls-no-default-ca tls-cafile=/etc/squid/upstream-transit-ca.crt tls-domain={{ squid_tls_sni }} connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
 {% else %}
 {#- Участок не шифруется: содержимое обращений защищено сквозным шифрованием
     клиента с сервисом, но заголовок CONNECT идёт открытым текстом, и наблюдателю

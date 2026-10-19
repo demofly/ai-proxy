@@ -44,10 +44,10 @@ map $ssl_preread_server_name $sni_backend {
 }
 
 # ============================================================================
-# Fallback upstream: local Squid (or any default handler on 127.0.0.1:3128)
+# Fallback upstream: local Squid (squid_local_port)
 # ============================================================================
 upstream fallback_squid {
-    server 127.0.0.1:3128;
+    server 127.0.0.1:{{ squid_local_port | default(3128) | int }};
 }
 
 # ============================================================================
@@ -76,7 +76,7 @@ server {
     include /etc/nginx/stream.d/router.d/*.conf;
 
     # Timeouts: max of all co-deployed projects' requirements
-    # 1800s = 30 min (Squid chain: AI API can "think" up to 30 minutes)
+    # Squid chain: idle CONNECT/API waits follow read_timeout (default 1 hour).
     # MTProxy chain uses a 360s idle timeout in its own stream blocks
     proxy_connect_timeout 10s;
     # Предел простоя маршрутизатора держится ВЫШЕ предела Squid (час по

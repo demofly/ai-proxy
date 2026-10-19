@@ -130,7 +130,7 @@ def build(output):
         'tasks/shared-firewall.yml': load(DEPLOY / 'tasks/shared-firewall.yml'),
         'roles/crowdsec/tasks/main.yml': load(DEPLOY / 'roles/crowdsec/tasks/main.yml'),
         'roles/dns_resolver/tasks/main.yml': dns,
-        'roles/mtproxy/tasks/main.yml': load(DEPLOY / 'roles/mtproxy/tasks/main.yml'),
+        'roles/mtproxy/tasks/daemon.yml': load(DEPLOY / 'roles/mtproxy/tasks/daemon.yml'),
         'roles/nginx/tasks/https-proxy-certificate.yml': load(DEPLOY / 'roles/nginx/tasks/https-proxy-certificate.yml'),
     }
     targets = {

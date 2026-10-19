@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(shutil.which('ansible-playbook'), 'requires ansible-playbook')
 class ProxyTransitTests(unittest.TestCase):
-    def render(self, overrides=None, rejected=False):
+    def render(self, overrides=None, rejected=False, upstream_overrides=None):
         source = yaml.safe_load((ROOT / 'playbook.yml').read_text(encoding='utf-8'))[0]
         defaults = next(task for task in source['pre_tasks']
                         if 'squid_transit_tls' in task.get('ansible.builtin.set_fact', {}))
@@ -32,6 +32,8 @@ class ProxyTransitTests(unittest.TestCase):
                                         'mtproxy_enabled': True},
                                         'upstream-two': {'ansible_host': '198.51.100.21',
                                                          'proxy_port': 443, 'mtproxy_enabled': True}}}}}}
+            for host in inventory['all']['children']['upstreams']['hosts'].values():
+                host.update(upstream_overrides or {})
             (tmp / 'inventory.yml').write_text(yaml.safe_dump(inventory), encoding='utf-8')
             values = dict(enable_caching=False, enable_logging=False, enable_auth=True,
                           nginx_on_443=True, proxy_port=443, squid_workers=1,
@@ -83,6 +85,12 @@ class ProxyTransitTests(unittest.TestCase):
 
     def test_custom_transit_name_is_used_for_verification_and_routing(self):
         self.assert_encrypted(self.render({'squid_transit_tls': True, 'squid_tls_sni': 'proxy-transit.test'}), 'proxy-transit.test')
+
+    def test_direct_tls_parent_uses_its_configured_public_port(self):
+        rendered = self.render({'squid_transit_tls': True}, upstream_overrides={
+            'proxy_port': 8443, 'mtproxy_enabled': False, 'behind_nginx': False})
+        peers = [line for line in rendered['access'].splitlines() if line.startswith('cache_peer ')]
+        self.assertTrue(all(' parent 8443 0 ' in line and ' tls ' in line for line in peers))
 
     def assert_plain(self, rendered):
         peer = next(line for line in rendered['access'].splitlines() if line.startswith('cache_peer '))

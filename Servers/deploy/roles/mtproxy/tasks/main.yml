@@ -167,6 +167,7 @@
     mode: '0700'
 
 - name: "Выпустить самоподписанный TLS-сертификат участка MTProxy"
+  when: mtproxy_enabled | default(false) | bool
   ansible.builtin.command:
     cmd: >
       openssl req -x509
@@ -179,6 +180,7 @@
     creates: /etc/nginx/ssl/mtproxy.crt
 
 - name: "Ограничить доступ к приватному TLS-ключу"
+  when: mtproxy_enabled | default(false) | bool
   ansible.builtin.file:
     path: /etc/nginx/ssl/mtproxy.key
     owner: root
@@ -267,7 +269,33 @@
     insertbefore: '^\s*events\s*\{'
   notify: "Перечитать конфигурацию nginx для MTProxy"
 
+- name: "Проверить наличие службы mtg при отключённом Telegram-тракте"
+  ansible.builtin.stat:
+    path: /etc/systemd/system/mtg.service
+  register: _disabled_mtg_unit
+  when: not (mtproxy_enabled | default(false) | bool)
+
+- name: "Остановить и отключить ранее установленный mtg"
+  ansible.builtin.systemd:
+    name: mtg
+    state: stopped
+    enabled: false
+  when:
+    - not (mtproxy_enabled | default(false) | bool)
+    - _disabled_mtg_unit.stat.exists | default(false)
+
+- name: "Удалить маршруты отключённого MTProxy на upstream"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/nginx/stream.d/10-mtproxy-tls.conf
+    - /etc/nginx/stream.d/sni-map.d/mtproxy.conf
+  when: not (mtproxy_enabled | default(false) | bool)
+  notify: "Перечитать конфигурацию nginx для MTProxy"
+
 - name: "Разместить потоковую конфигурацию TLS-терминатора MTProxy"
+  when: mtproxy_enabled | default(false) | bool
   ansible.builtin.template:
     src: nginx-mtproxy-stream.conf.j2
     dest: /etc/nginx/stream.d/10-mtproxy-tls.conf
@@ -277,6 +305,7 @@
   notify: "Перечитать конфигурацию nginx для MTProxy"
 
 - name: "Разместить запись MTProxy в карте SNI"
+  when: mtproxy_enabled | default(false) | bool
   ansible.builtin.template:
     src: sni-map.d/mtproxy.conf.j2
     dest: /etc/nginx/stream.d/sni-map.d/mtproxy.conf
@@ -300,7 +329,7 @@
     recurse: false
   register: _mtg_versions
   changed_when: false
-  when: (mtg_versions_keep | default(0) | int) > 0
+  when: mtproxy_enabled | default(false) | bool and (mtg_versions_keep | default(0) | int) > 0
 
 - name: "Удалить прежние версии mtg сверх предела хранения"
   ansible.builtin.file:
@@ -316,7 +345,7 @@
         | map(attribute='path') | list)[(mtg_versions_keep | default(0) | int):] }}
   loop_control:
     label: "{{ item }}"
-  when: (mtg_versions_keep | default(0) | int) > 0
+  when: mtproxy_enabled | default(false) | bool and (mtg_versions_keep | default(0) | int) > 0
 
 # ===========================================================================
 # Терминация TLS участка access → upstream
@@ -374,7 +403,7 @@
   notify: "Перечитать конфигурацию nginx для MTProxy"
 
 # Apply nginx config before starting mtg
-- name: "Выполнить ожидающие обработчики nginx перед запуском mtg"
+- name: "Применить конфигурацию upstream-маршрутизатора перед запуском служб"
   ansible.builtin.meta: flush_handlers
 
 - name: "Включить автозапуск и запустить nginx на upstream"
@@ -387,269 +416,6 @@
 # Phase: mtg daemon
 # ===========================================================================
 
-- name: "Создать системного пользователя mtproxy"
-  ansible.builtin.user:
-    name: mtproxy
-    system: true
-    shell: /usr/sbin/nologin
-    create_home: false
-
-# ---------------------------------------------------------------------------
-# Установка mtg: версионированный каталог + переключение символьной ссылки
-# ---------------------------------------------------------------------------
-# Требование: смена номера версии в переменных ведёт к переустановке, повторный
-# прогон с тем же номером не делает ничего.
-#
-# Устройство:
-#   /usr/local/lib/mtg/{версия}/mtg — сам бинарник, по каталогу на версию;
-#   /usr/local/bin/mtg              — символьная ссылка на выбранную версию,
-#                                     путь из ExecStart юнита не меняется.
-#
-# Признак «версия установлена» — существование версионированного пути, а НЕ
-# существование /usr/local/bin/mtg. Прежняя редакция проверяла второе, и потому
-# смена mtproxy_version не приводила ни к чему: файл на месте — блок пропущен.
-#
-# Свойства схемы:
-#   идемпотентность — при неизменном номере блок загрузки пропущен, а ссылка
-#     уже указывает куда надо, и задача переключения не даёт `changed`;
-#   применение новой версии — ссылка меняет цель, задача даёт `changed` и
-#     уведомляет о перезапуске. Уведомление висит ИМЕННО на ссылке: работающий
-#     процесс держит прежний inode, и без перезапуска новый бинарник на диске
-#     остался бы неработающим (прежде перезапуск был подвешен только на mtg.toml
-#     и на юнит, то есть смена бинарника службу не трогала);
-#   откат — возврат прежнего номера версии: каталог предыдущей версии остаётся
-#     на узле, повторная загрузка не нужна. Для MTProxy это существенно:
-#     несовместимость клиентов обнаруживается уже после перезапуска.
-- name: "Определить архитектуру узла для загрузки mtg"
-  ansible.builtin.set_fact:
-    mtg_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
-
-# Каталог версий mtg; общий для всех установленных версий.
-- name: "Создать корневой каталог версий mtg"
-  ansible.builtin.file:
-    path: /usr/local/lib/mtg
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-
-# Установлена ли ЗАДАННАЯ версия — единственный вопрос, решающий, нужна ли
-# загрузка. Ответ не зависит от состояния /usr/local/bin/mtg.
-- name: "Проверить наличие требуемой версии mtg"
-  ansible.builtin.stat:
-    path: "/usr/local/lib/mtg/{{ mtproxy_version }}/mtg"
-  register: mtg_versioned_binary
-
-- name: "Загрузить и установить mtg"
-  when: not mtg_versioned_binary.stat.exists
-  block:
-    # Контрольная сумма проверяется при непустом mtproxy_sha256. Пустое значение
-    # оставлено умолчанием намеренно: обязательная сумма блокировала бы переход
-    # на новую версию до её отыскания, то есть откладывала бы обновление
-    # бессрочно. Заданная — закрывает распаковку стороннего архива в системный
-    # каталог без проверки целостности.
-    - name: "Загрузить архив mtg"
-      ansible.builtin.get_url:
-        url: "https://github.com/9seconds/mtg/releases/download/v{{ mtproxy_version }}/mtg-{{ mtproxy_version }}-linux-{{ mtg_arch }}.tar.gz"
-        dest: "/tmp/mtg-{{ mtproxy_version }}.tar.gz"
-        mode: "0644"
-        checksum: "{{ ('sha256:' + mtproxy_sha256) if (mtproxy_sha256 | default('') | length > 0) else omit }}"
-
-    - name: "Создать временный каталог распаковки mtg"
-      ansible.builtin.file:
-        path: "/tmp/mtg-extract-{{ mtproxy_version }}"
-        state: directory
-        mode: "0755"
-
-    - name: "Распаковать архив mtg"
-      ansible.builtin.unarchive:
-        src: "/tmp/mtg-{{ mtproxy_version }}.tar.gz"
-        dest: "/tmp/mtg-extract-{{ mtproxy_version }}"
-        remote_src: true
-
-    # Поиск бинарника сохранён: имя файла внутри архива между выпусками плавает
-    # (то `mtg`, то `mtg-{версия}-linux-{арх}`), и жёсткий путь ломался бы на
-    # очередном выпуске.
-    - name: "Найти бинарный файл mtg после распаковки"
-      ansible.builtin.shell:
-        cmd: find /tmp/mtg-extract-{{ mtproxy_version }} -name 'mtg' -type f -o -name 'mtg-*-linux-*' -type f | head -1
-      register: mtg_found_binary
-      changed_when: false
-      failed_when: mtg_found_binary.stdout == ""
-
-    - name: "Создать каталог требуемой версии mtg"
-      ansible.builtin.file:
-        path: "/usr/local/lib/mtg/{{ mtproxy_version }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: "Установить бинарный файл mtg в каталог версии"
-      ansible.builtin.copy:
-        src: "{{ mtg_found_binary.stdout }}"
-        dest: "/usr/local/lib/mtg/{{ mtproxy_version }}/mtg"
-        owner: root
-        group: root
-        mode: "0755"
-        remote_src: true
-
-    - name: "Удалить временные файлы"
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - "/tmp/mtg-extract-{{ mtproxy_version }}"
-        - "/tmp/mtg-{{ mtproxy_version }}.tar.gz"
-
-# Переключение ссылки — единственный шаг, применяющий новую версию, и он же
-# несёт уведомление о перезапуске службы.
-#
-# Миграция с прежней схемы: на узлах старых развёртываний /usr/local/bin/mtg —
-# обычный файл; `force: true` заменяет его ссылкой. Замена выполняется только
-# ПОСЛЕ заполнения версионированного каталога: при отказе загрузки блок выше
-# прерывает роль, и прежний бинарник остаётся на месте нетронутым.
-- name: "Переключить ссылку mtg на требуемую версию"
-  ansible.builtin.file:
-    src: "/usr/local/lib/mtg/{{ mtproxy_version }}/mtg"
-    dest: /usr/local/bin/mtg
-    state: link
-    owner: root
-    group: root
-    force: true
-  notify: "Перезапустить mtg"
-
-- name: "Создать каталог конфигурации MTProxy"
-  ansible.builtin.file:
-    path: /etc/mtproxy
-    state: directory
-    owner: mtproxy
-    group: mtproxy
-    mode: "0750"
-
-# Генерация секрета при первом деплое (если не задан вручную)
-# Проверяем mtg.toml (v2) и mtg.env (legacy) для обратной совместимости
-- name: "Проверить наличие конфигурации mtg в формате TOML"
-  ansible.builtin.stat:
-    path: /etc/mtproxy/mtg.toml
-  register: mtg_toml_file
-
-- name: "Проверить наличие прежнего файла mtg.env"
-  ansible.builtin.stat:
-    path: /etc/mtproxy/mtg.env
-  register: mtg_env_file
-
-- name: "Создать начальный секрет mtg при отсутствии настроенного и сохранённого"
-  ansible.builtin.command:
-    cmd: /usr/local/bin/mtg generate-secret --hex {{ mtproxy_fake_tls_domain }}
-  register: mtg_generated_secret
-  when:
-    - mtproxy_secret == ""
-    - not mtg_toml_file.stat.exists
-    - not mtg_env_file.stat.exists
-    - hostvars['localhost']._mtproxy_cluster_secret is not defined
-  changed_when: false
-  no_log: true
-
-- name: "Прочитать существующий секрет из конфигурации TOML"
-  ansible.builtin.shell:
-    cmd: grep '^secret' /etc/mtproxy/mtg.toml | sed 's/.*"\(.*\)"/\1/'
-  register: mtg_existing_secret_toml
-  when:
-    - mtproxy_secret == ""
-    - mtg_toml_file.stat.exists
-  changed_when: false
-  no_log: true
-
-- name: "Прочитать существующий секрет из прежнего файла окружения"
-  ansible.builtin.shell:
-    cmd: grep '^MTG_SECRET=' /etc/mtproxy/mtg.env | cut -d= -f2
-  register: mtg_existing_secret_env
-  when:
-    - mtproxy_secret == ""
-    - not mtg_toml_file.stat.exists
-    - mtg_env_file.stat.exists
-  changed_when: false
-  no_log: true
-
-- name: "Определить действующий секрет MTProxy"
-  no_log: true
-  ansible.builtin.set_fact:
-    mtproxy_secret_resolved: >-
-      {%- if hostvars['localhost']._mtproxy_cluster_secret is defined -%}
-        {{ hostvars['localhost']._mtproxy_cluster_secret }}
-      {%- elif mtproxy_secret != "" -%}
-        {{ mtproxy_secret }}
-      {%- elif mtg_toml_file.stat.exists -%}
-        {{ mtg_existing_secret_toml.stdout }}
-      {%- elif mtg_env_file.stat.exists -%}
-        {{ mtg_existing_secret_env.stdout }}
-      {%- else -%}
-        {{ mtg_generated_secret.stdout }}
-      {%- endif -%}
-
-- name: "Разместить конфигурацию mtg в формате TOML v2"
-  ansible.builtin.template:
-    src: mtg.toml.j2
-    dest: /etc/mtproxy/mtg.toml
-    owner: mtproxy
-    group: mtproxy
-    mode: "0640"
-  notify: "Перезапустить mtg"
-
-- name: "Удалить прежний mtg.env после перехода на TOML"
-  ansible.builtin.file:
-    path: /etc/mtproxy/mtg.env
-    state: absent
-  when: mtg_env_file.stat.exists | default(false)
-
-- name: "Разместить административный реестр пользователей MTProxy"
-  ansible.builtin.template:
-    src: users.txt.j2
-    dest: /etc/mtproxy/users.txt
-    owner: mtproxy
-    group: mtproxy
-    mode: "0640"
-
-- name: "Разместить службу systemd для mtg"
-  ansible.builtin.copy:
-    dest: /etc/systemd/system/mtg.service
-    mode: "0644"
-    content: |
-      [Unit]
-      Description=MTProxy (mtg) for Telegram
-      After=network.target nginx.service
-
-      [Service]
-      Type=simple
-      User=mtproxy
-      Group=mtproxy
-      ExecStart=/usr/local/bin/mtg run /etc/mtproxy/mtg.toml
-      Restart=on-failure
-      RestartSec=5
-      Environment=GOMEMLIMIT={{ (mem_mtproxy_mb | default(32) | int * 0.65) | int }}MiB
-      MemoryMax={{ mem_mtproxy_mb | default(32) }}M
-      LimitNOFILE=4096
-
-      [Install]
-      WantedBy=multi-user.target
-  notify:
-    - "Перечитать конфигурацию systemd для mtg"
-    - "Перезапустить mtg"
-
-- name: "Перечитать конфигурацию systemd после установки службы mtg"
-  ansible.builtin.systemd:
-    daemon_reload: true
-
-- name: "Включить автозапуск и запустить mtg"
-  ansible.builtin.systemd:
-    name: mtg
-    state: started
-    enabled: true
-
-# ===========================================================================
-# Firewall для MTProxy
-# ===========================================================================
-# Правила файрвола для MTProxy (порт 443) консолидированы в playbook.yml
-# (секция "Phase: Firewall") для корректного порядка выполнения:
-# миграция Squid-правил → добавление MTProxy-правил.
+- name: "Настроить демон MTProxy при включённом Telegram-тракте"
+  when: mtproxy_enabled | default(false) | bool
+  ansible.builtin.include_tasks: daemon.yml

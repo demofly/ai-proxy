@@ -289,7 +289,7 @@
   {
     "file": "systemd/system/mtg.service",
     "target": "/etc/systemd/system/mtg.service",
-    "source": "roles/mtproxy/tasks/main.yml",
+    "source": "roles/mtproxy/tasks/daemon.yml",
     "when": "proxy_role == 'upstream'",
     "note": ""
   },

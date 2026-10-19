@@ -60,6 +60,34 @@
     # Service floors/weighted allocation live in filter_plugins/resources.py.
 
   pre_tasks:
+    - name: "Проверить наличие nginx на порту 443"
+      ansible.builtin.shell: |
+        set -o pipefail
+        if systemctl is-active --quiet nginx 2>/dev/null && \
+           grep -rqlE 'listen\s+(443|.*:443)\b' /etc/nginx/sites-enabled/ /etc/nginx/stream.d/ /etc/nginx/conf.d/ 2>/dev/null; then
+          echo 'true'
+        else
+          echo 'false'
+        fi
+      args:
+        executable: /bin/bash
+      register: _nginx_443_detect
+      changed_when: false
+      check_mode: false
+      tags: [always]
+
+    - name: "Определить работу Squid за nginx с учётом inventory"
+      ansible.builtin.set_fact:
+        nginx_on_443: "{{ https_proxy_enabled | default(false) | bool or mtproxy_enabled | default(false) | bool or (behind_nginx | default(_nginx_443_detect.stdout | trim | bool) | bool) }}"
+      tags: [always]
+
+    - name: "Проверить согласованность портов прокси"
+      ansible.builtin.include_tasks:
+        file: tasks/ports.yml
+        apply:
+          tags: [always]
+      tags: [always]
+
     - name: "Проверить параметры клиентского HTTPS-прокси"
       ansible.builtin.assert:
         that:
@@ -908,28 +936,6 @@
         - /var/log/squid
 
     # Определяем, работает ли nginx с виртуалхостом на порту 443.
-    # Если да — Squid слушает на 127.0.0.1:3128 (nginx терминирует TLS и проксирует).
-    # Ручное переопределение: behind_nginx=true/false в inventory.
-    - name: "Проверить наличие nginx на порту 443"
-      ansible.builtin.shell: |
-        set -o pipefail
-        if systemctl is-active --quiet nginx 2>/dev/null && \
-           grep -rqlE 'listen\s+(443|.*:443)\b' /etc/nginx/sites-enabled/ /etc/nginx/stream.d/ /etc/nginx/conf.d/ 2>/dev/null; then
-          echo 'true'
-        else
-          echo 'false'
-        fi
-      args:
-        executable: /bin/bash
-      register: _nginx_443_detect
-      changed_when: false
-      tags: [nginx]
-
-    - name: "Определить работу Squid за nginx с учётом inventory"
-      ansible.builtin.set_fact:
-        nginx_on_443: "{{ https_proxy_enabled | default(false) | bool or behind_nginx | default(mtproxy_enabled | default(false) | bool or _nginx_443_detect.stdout | trim | bool) }}"
-      tags: [nginx]
-
     # ===========================================================================
     # Phase: Firewall detection (before roles that need it)
     # ===========================================================================
@@ -985,17 +991,17 @@
     # петлевой адрес, без него — внешний порт из инвентори.
     # ===========================================================================
 
-    # Роль MTProxy (upstream): ставит nginx, настраивает маршрутизацию по имени SNI
+    # Upstream-роль ставит nginx независимо от Telegram, настраивает маршрутизацию по имени SNI
     # на порту 443, удаляет включённый по умолчанию сайт nginx (освобождая порт 80
-    # соседним проектам), разворачивает mtg.
-    - name: "Подключить роль MTProxy"
+    # соседним проектам); mtg разворачивается только при mtproxy_enabled=true.
+    - name: "Настроить upstream-маршрутизатор и необязательный MTProxy"
       ansible.builtin.include_role:
         name: mtproxy
         apply:
           tags: [mtproxy]
       when:
         - proxy_role == 'upstream'
-        - mtproxy_enabled | default(false) | bool
+        - nginx_on_443 | bool
       tags: [mtproxy]
 
     # nginx role (access): устанавливает nginx на :443, переконфигурирует Squid

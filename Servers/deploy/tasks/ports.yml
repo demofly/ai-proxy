@@ -1,0 +1,39 @@
+---
+- name: "Проверить внешний порт прокси и режим маршрутизатора"
+  ansible.builtin.assert:
+    that:
+      - proxy_port | string is match('^[0-9]+$')
+      - proxy_port | int >= 1 and proxy_port | int <= 65535
+      - not (nginx_on_443 | bool) or proxy_port | int == 443
+      - not (mtproxy_enabled | default(false) | bool) or behind_nginx | default(true) | bool
+    fail_msg: >-
+      proxy_port должен быть целым портом 1–65535. Общий SNI-маршрутизатор
+      использует только 443: при работе за nginx задайте proxy_port=443.
+      MTProxy требует маршрутизатор; behind_nginx=false с MTProxy несовместим.
+      Произвольный внешний порт поддерживается для прямого Squid без nginx.
+    success_msg: "Внешний порт соответствует режиму прокси."
+
+- name: "Собрать порты слушателей узла"
+  ansible.builtin.set_fact:
+    _proxy_listener_ports: >-
+      {{ [proxy_port, squid_mgmt_port | default(3129)]
+         + ([squid_local_port | default(3128)] if nginx_on_443 | bool else [])
+         + ([https_proxy_local_port | default(4445)] if https_proxy_enabled | default(false) | bool else [])
+         + ([mtproxy_relay_port | default(9443)] if proxy_role == 'access' and mtproxy_enabled | default(false) | bool else [])
+         + ([mtproxy_tls_port | default(4443), mtproxy_local_port | default(2083)] if proxy_role == 'upstream' and mtproxy_enabled | default(false) | bool else [])
+         + ([squid_tls_term_port | default(4444)] if proxy_role == 'upstream' and nginx_on_443 | bool and squid_transit_tls | default(false) | bool else []) }}
+
+- name: "Проверить диапазон и отсутствие конфликтов портов"
+  ansible.builtin.assert:
+    that:
+      - _proxy_listener_ports | map('string') | select('match', '^[0-9]+$') | list | length == _proxy_listener_ports | length
+      - _proxy_listener_ports | map('int') | min > 0
+      - _proxy_listener_ports | map('int') | max <= 65535
+      - _proxy_listener_ports | map('int') | unique | list | length == _proxy_listener_ports | length
+    fail_msg: >-
+      Слушатели прокси требуют разных целых портов 1–65535.
+      Проверьте proxy_port, squid_local_port, squid_mgmt_port,
+      https_proxy_local_port, mtproxy_relay_port, mtproxy_tls_port,
+      mtproxy_local_port и squid_tls_term_port для включённых служб.
+      Получен список: {{ _proxy_listener_ports }}.
+    success_msg: "Порты включённых слушателей различаются и входят в допустимый диапазон."

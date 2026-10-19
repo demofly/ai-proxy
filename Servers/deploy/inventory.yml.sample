@@ -48,8 +48,8 @@ all:
         # Squid слушает loopback за общим nginx с PROXY protocol.
         # Без параметра учитываются MTProxy и обнаруженный nginx на 443.
         behind_nginx: true
-        # Локальный порт Squid; общий SNI router использует фиксированный 3128.
-        # При behind_nginx: true оставьте 3128, пока router не изменён согласованно.
+        # Loopback-порт Squid; используется также fallback общего SNI router
+        # и HTTPS-терминатором. Должен отличаться от остальных слушателей узла.
         squid_local_port: 3128
 
         # Зашифрованный клиентский вход через SNI на общем 443; по умолчанию false.
@@ -117,7 +117,7 @@ all:
         enable_caching: false
         # Включает локальный Squid за общим маршрутизатором nginx.
         behind_nginx: true
-        # Должен совпадать с портом fallback в общем SNI router: 3128.
+        # Loopback-порт Squid; SNI fallback и TLS-терминатор используют это же значение.
         squid_local_port: 3128
         # Число неудачных подключений до исключения этого пира Squid (по умолчанию 2).
         connect_fail_limit: 2
@@ -248,8 +248,8 @@ all:
     # Общее имя SNI и сертификата участка; разрешение в публичном DNS не нужно.
     # Сертификат/ключ создаются на управляющей машине в игнорируемом deploy/tls/.
     squid_tls_sni: transit.internal
-    # Loopback-порт TLS-терминатора Squid на upstream за SNI router при MTProxy.
-    # Без такого маршрутизатора зашифрованный участок принимает сам Squid.
+    # Loopback-порт TLS-терминатора Squid на upstream за SNI router, независимо
+    # от MTProxy. При behind_nginx=false и выключенном MTProxy TLS принимает Squid.
     squid_tls_term_port: 4444
     # Журнал общего SNI router; хранит IP и SNI независимо от enable_logging Squid.
     # Можно указать /dev/null; при CrowdSec тот же путь входит в источники журналов.
