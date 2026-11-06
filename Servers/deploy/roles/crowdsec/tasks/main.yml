@@ -1,5 +1,5 @@
 ---
-# [AITS] 2026-08-30T21:49:11Z
+# [AITS] 2026-11-06T11:03:54Z
 # AI-GENERATED — NOT REVIEWED
 
 # --- CrowdSec repository ---
@@ -51,10 +51,16 @@
   register: _crowdsec_dpkg_recovery
   changed_when: "'CONFIGURED' in _crowdsec_dpkg_recovery.stdout"
 
-# One package transaction, with the same package-upgrade policy as other roles.
-- name: "Установить CrowdSec и firewall bouncer"
+# Движок и bouncer ставятся РАЗНЫМИ транзакциями, движок первым. В общей
+# транзакции prerm движка останавливает LAPI, а dpkg волен настроить bouncer
+# раньше движка (bouncer не зависит от пакета crowdsec): postinst bouncer
+# делает `systemctl start`, служба падает на connection refused к LAPI, и пакет
+# остаётся half-configured. Постинсталл движка сам запускает crowdsec
+# (Type=notify — start возвращается после готовности), так что к установке
+# bouncer LAPI уже отвечает.
+- name: "Установить движок CrowdSec"
   ansible.builtin.apt:
-    name: [crowdsec, crowdsec-firewall-bouncer-nftables]
+    name: crowdsec
     state: "{{ pkg_state }}"
   environment:
     CROWDSEC_PACKAGE_DISABLE_WIZARD: "1"
@@ -96,6 +102,37 @@
      | combine(_crowdsec_local_config, recursive=true)).db_config.type == 'sqlite'
   notify: "Перезапустить CrowdSec"
   no_log: true
+
+# Действующий адрес LAPI: базовая конфигурация, перекрытая локальной.
+- name: "Определить адрес локального API CrowdSec"
+  ansible.builtin.set_fact:
+    # host:port, на котором слушает LAPI; пусто, если сервер API на узле выключен.
+    _crowdsec_lapi_listen: >-
+      {%- set _server = ((_crowdsec_base_config.content | b64decode | from_yaml)
+                         | combine(_crowdsec_local_config, recursive=true)).api.server | default({}) -%}
+      {{ _server.listen_uri | default('') if _server.enable | default(true) | bool else '' }}
+  no_log: true
+
+# Движок мог остаться остановленным прерванным прошлым прогоном: postinst
+# bouncer запускает службу и требует отвечающий LAPI.
+- name: "Запустить CrowdSec перед установкой bouncer"
+  ansible.builtin.systemd:
+    name: crowdsec
+    state: started
+  when: _crowdsec_lapi_listen | length > 0
+
+- name: "Дождаться готовности локального API CrowdSec"
+  ansible.builtin.wait_for:
+    host: "{{ _crowdsec_lapi_listen.rsplit(':', 1)[0] }}"
+    port: "{{ _crowdsec_lapi_listen.rsplit(':', 1)[1] | int }}"
+    timeout: 60
+  when: _crowdsec_lapi_listen | length > 0 and not ansible_check_mode
+
+- name: "Установить firewall bouncer CrowdSec"
+  ansible.builtin.apt:
+    name: crowdsec-firewall-bouncer-nftables
+    state: "{{ pkg_state }}"
+  throttle: 1
 
 # --- Whitelist infrastructure IPs (prevent banning our own nodes) ---
 
