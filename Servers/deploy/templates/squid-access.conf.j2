@@ -1,4 +1,4 @@
-# [AITS] 2026-08-30T16:55:28Z
+# [AITS] 2026-11-06T15:09:32Z
 # Конфигурация Squid — access-уровень. Версия ставится из репозитория ОС и здесь
 # не фиксируется; проверялась на 6.x.
 # Managed by Ansible - DO NOT EDIT MANUALLY
@@ -75,14 +75,43 @@ proxy_protocol_access deny all
 http_port {{ proxy_port }} tcpkeepalive=60,10,30
 {% endif %}
 
-{% if groups['upstreams'] is defined and groups['upstreams'] | length > 0 %}
+{# AI-GENERATED — NOT REVIEWED: SECTION START #}
+{#- Пулы: группа пользователей -> пул -> набор upstream. Активен пул, у которого
+    есть и upstream, и пользователи (all_users либо непустой список). Пулы без
+    upstream или без пользователей ACL и пиров не порождают. -#}
+{#- Барьер: прямой рендер без _squid_pools иначе молча дал бы конфигурацию «отказ всем». -#}
+{% if _squid_pools is not defined %}
+{{ _squid_pools.must_be_defined }}
+{% endif %}
+{% set active_pools = [] %}
+{% for pool in _squid_pools %}
+{% if pool.upstreams | length > 0 and (pool.all_users or pool.users | length > 0) %}
+{% set _ = active_pools.append(pool) %}
+{% endif %}
+{% endfor %}
+{#- Пиры: упорядоченное уникальное объединение upstream активных пулов
+    в порядке группы inventory upstreams. -#}
+{% set peers = [] %}
+{% for name in groups['upstreams'] | default([]) %}
+{% for pool in active_pools %}
+{% if name in pool.upstreams and name not in peers %}
+{% set _ = peers.append(name) %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{# AI-GENERATED — NOT REVIEWED: SECTION END #}
+{# AI-GENERATED — NOT REVIEWED: SECTION START #}
+{% if peers | length > 0 %}
+{# AI-GENERATED — NOT REVIEWED: SECTION END #}
 # Upstream прокси с автоматическим failover
 # userhash - выбор пира по хэшу имени пользователя (устойчивая привязка).
 #            Это единственный заданный алгоритм: директива sourcehash не выпускается.
 #            При отказе пира он исключается из кольца, его пользователи уходят на живые.
 # connect-fail-limit=2 - после 2 неудачных попыток пометить как недоступный
 # connect-timeout=5 - таймаут подключения 5 секунд (быстрое обнаружение проблем)
-{% for upstream_host in squid_upstream_hosts | default(groups['upstreams']) %}
+{# AI-GENERATED — NOT REVIEWED: SECTION START #}
+{% for upstream_host in peers %}
+{# AI-GENERATED — NOT REVIEWED: SECTION END #}
 {% set upstream = hostvars[upstream_host] %}
 {% if squid_transit_tls | default(false) | bool %}
 {#- proxy_port — внешний порт принимающего узла: 443 за SNI router либо
@@ -99,6 +128,42 @@ cache_peer {{ upstream.ansible_host }} parent {{ upstream.proxy_port }} 0 no-que
 cache_peer {{ upstream.ansible_host }} parent {{ upstream.proxy_port }} 0 no-query userhash connect-fail-limit={{ upstream.connect_fail_limit | default(2) }} connect-timeout={{ upstream.connect_timeout | default(5) }} name={{ upstream_host }}
 {% endif %}
 {% endfor %}
+
+{# AI-GENERATED — NOT REVIEWED: SECTION START #}
+{% if enable_auth %}
+# Пулы пользователей: доступ пира ограничен пулами, в которые он входит.
+# Длинный список имён дробится на несколько acl с тем же именем — Squid
+# объединяет их по ИЛИ. userhash выбирает пира только среди разрешённых
+# cache_peer_access.
+{% set routed = namespace(all_users=false, users=[]) %}
+{% for pool in active_pools %}
+{% if pool.all_users %}
+acl aiproxy_pool_{{ pool.name }} proxy_auth REQUIRED
+{% set routed.all_users = true %}
+{% else %}
+{% for chunk in pool.users | batch(20) %}
+acl aiproxy_pool_{{ pool.name }} proxy_auth {{ chunk | join(' ') }}
+{% endfor %}
+{% set routed.users = routed.users + pool.users %}
+{% endif %}
+{% endfor %}
+{% if routed.all_users %}
+acl aiproxy_routed proxy_auth REQUIRED
+{% else %}
+{% for chunk in routed.users | unique | sort | batch(20) %}
+acl aiproxy_routed proxy_auth {{ chunk | join(' ') }}
+{% endfor %}
+{% endif %}
+{% for peer in peers %}
+{% for pool in active_pools %}
+{% if peer in pool.upstreams %}
+cache_peer_access {{ peer }} allow aiproxy_pool_{{ pool.name }}
+{% endif %}
+{% endfor %}
+cache_peer_access {{ peer }} deny all
+{% endfor %}
+{% endif %}
+{# AI-GENERATED — NOT REVIEWED: SECTION END #}
 
 # Время восстановления dead peer (проверять каждые 15 секунд)
 dead_peer_timeout {{ dead_peer_timeout | default('15 seconds') }}
@@ -126,6 +191,11 @@ always_direct allow manager
 # Запасной прямой путь РАЗРЕШЁН: при недоступности всех вышестоящих узлов
 # обращение уйдёт напрямую, раскрыв адрес access-узла целевому сервису.
 # Пиры остаются предпочтительными, прямой путь берётся лишь когда живых нет.
+# nonhierarchical_direct off: по умолчанию Squid отправляет CONNECT (весь HTTPS)
+# напрямую в обход пиров, и разграничение пулов для него не действовало бы.
+{# AI-GENERATED — NOT REVIEWED: SECTION START #}
+nonhierarchical_direct off
+{# AI-GENERATED — NOT REVIEWED: SECTION END #}
 prefer_direct off
 {% else %}
 never_direct allow all
@@ -150,6 +220,18 @@ http_access deny manager
 {% set has_domains = (allowed_domains | default([]) | length > 0) or (allowed_domain_patterns | default([]) | length > 0) %}
 
 {% if enable_auth %}
+{# AI-GENERATED — NOT REVIEWED: SECTION START #}
+{% if active_pools | length > 0 %}
+# Пользователь вне активных пулов получает явный отказ 403 независимо от
+# allow_direct_fallback: прямой выход раскрыл бы адрес access-узла.
+# Завершающий all не даёт Squid отвечать 407-перезапросом, когда последний
+# ACL строки — proxy_auth.
+http_access deny authenticated !aiproxy_routed all
+{% else %}
+# Нет ни одного активного пула (пользователи или upstream не заданы): отказ всем.
+http_access deny all
+{% endif %}
+{# AI-GENERATED — NOT REVIEWED: SECTION END #}
 {% if has_domains %}
 {% if allowed_domains | default([]) | length > 0 %}
 http_access allow authenticated allowed_domains

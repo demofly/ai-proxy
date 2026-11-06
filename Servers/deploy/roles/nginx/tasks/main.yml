@@ -1,6 +1,6 @@
 # AI-GENERATED — NOT REVIEWED
 ---
-# [AITS] 2026-08-30T16:44:38Z
+# [AITS] 2026-11-06T17:40:02Z
 # Роль nginx проекта ai-assistants-proxy: маршрутизация по имени SNI для MTProxy и Squid.
 #
 # Устройство: ai-proxy — владелец nginx на узле. Ему безусловно принадлежат
@@ -262,15 +262,19 @@
         src: /etc/squid/squid.conf
         dest: /etc/squid/squid.conf.nginx-rollback
         remote_src: true
-        mode: '0644'
+        owner: root
+        group: proxy
+        mode: '0640'
 
+    # Права 0640 root:proxy: конфигурация access несёт имена пользователей пулов (ACL
+    # proxy_auth), а рабочий процесс Squid перечитывает её под группой proxy.
     - name: "Разместить конфигурацию локального Squid за nginx"
       ansible.builtin.template:
         src: "{{ playbook_dir }}/templates/squid-access.conf.j2"
         dest: "{{ squid_config_path | default('/etc/squid/squid.conf') }}"
         owner: root
-        group: root
-        mode: '0644'
+        group: proxy
+        mode: '0640'
         validate: 'squid -k parse -f %s'
       register: _squid_config_deployed
 

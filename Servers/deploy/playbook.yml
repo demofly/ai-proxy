@@ -1,5 +1,5 @@
 ---
-# [AITS] 2026-08-30T21:49:11Z
+# [AITS] 2026-11-06T17:40:02Z
 # Ansible Playbook для развертывания AI Proxy на базе Squid
 # Использование: ansible-playbook -i inventory.yml playbook.yml
 
@@ -179,26 +179,135 @@
       when: squid_transit_tls | bool
       tags: [always]
 
-    - name: "Определить пул upstream для Squid на access"
-      ansible.builtin.set_fact:
-        squid_upstream_hosts: "{{ squid_upstream_hosts | default(groups['upstreams']) }}"
+    # AI-GENERATED — NOT REVIEWED: SECTION START
+    # Пулы заменили прежний перечень upstream на узел: access-узлы общие и
+    # рендерят одни и те же пулы. Молчаливое игнорирование squid_upstream_hosts
+    # оставило бы намерение оператора (исключить неисправную связь) неисполненным.
+    - name: "Проверить отсутствие упразднённого перечня upstream для Squid"
+      ansible.builtin.assert:
+        that:
+          - squid_upstream_hosts is not defined
+        fail_msg: >-
+          Перечень upstream на узел перенесён в proxy_pools: удалите squid_upstream_hosts
+          и задайте upstream пула (поле upstreams — 'all' либо список имён из группы
+          upstreams); группы пользователей задаются в proxy_user_groups.
+        success_msg: "Упразднённый squid_upstream_hosts не задан."
       when: proxy_role == 'access'
       tags: [always]
 
-    - name: "Проверить состав пула upstream для Squid"
-      ansible.builtin.assert:
-        that:
-          - squid_upstream_hosts is sequence and squid_upstream_hosts is not string and squid_upstream_hosts is not mapping
-          - squid_upstream_hosts | length > 0
-          - squid_upstream_hosts | difference(groups['upstreams']) | length == 0
-          - squid_upstream_hosts | unique | length == squid_upstream_hosts | length
-        fail_msg: >-
-          squid_upstream_hosts должен содержать непустой список без повторов имён узлов
-          из группы upstreams. Пустой или неизвестный пул оставил бы access
-          без рабочего родительского прокси. Без переопределения используются все upstreams.
-        success_msg: "Пул upstream для Squid проверен: {{ squid_upstream_hosts | length }} узлов."
+    # Умолчания НЕ вынесены в vars плейбука: vars плейбука старше переменных
+    # inventory и перекрыли бы их. Умолчание — два пула: default (все пользователи,
+    # все upstream) и reserve (пустой и по пользователям, и по upstream).
+    - name: "Определить пулы upstream для Squid на access"
+      ansible.builtin.set_fact:
+        _squid_pools: >-
+          {{ proxy_pools
+             | default([{'name': 'default', 'groups': ['all'], 'upstreams': 'all'},
+                        {'name': 'reserve', 'groups': [], 'upstreams': []}])
+             | aiproxy_pools(proxy_user_groups | default({}), groups['upstreams'] | default([])) }}
       when: proxy_role == 'access'
       tags: [always]
+
+    - name: "Показать состав пулов upstream для Squid"
+      ansible.builtin.debug:
+        msg: >-
+          Пул {{ item.name }}:
+          {{ 'все пользователи' if item.all_users else (item.users | length | string) + ' польз.' }},
+          upstream: {{ item.upstreams | join(', ') if item.upstreams else 'нет' }}
+      loop: "{{ _squid_pools }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: proxy_role == 'access'
+      tags: [always]
+    # AI-GENERATED — NOT REVIEWED: SECTION END
+
+    # Проверки файла паролей стоят в pre_tasks: отказ происходит до первой
+    # задачи, меняющей узел (пакеты, sshd, службы), и при любом наборе тегов.
+    - name: "Проверить наличие и свойства локального файла паролей"
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/passwd"
+      register: _passwd_stat
+      delegate_to: localhost
+      become: false
+      failed_when: false
+      when: proxy_role == 'access' and enable_auth | default(false) | bool
+      tags: [always]
+
+    - name: "Показать свойства локального файла паролей"
+      ansible.builtin.debug:
+        msg: >-
+          Каталог плейбука: {{ playbook_dir }} ·
+          ожидаемый файл: {{ playbook_dir }}/passwd ·
+          существует: {{ _passwd_stat.stat.exists | default('осмотр не выполнен') }} ·
+          размер: {{ _passwd_stat.stat.size | default('—') }} ·
+          права: {{ _passwd_stat.stat.mode | default('—') }} ·
+          ссылка: {{ _passwd_stat.stat.islnk | default('—') }}
+      when:
+        - proxy_role == 'access' and enable_auth | default(false) | bool
+        - not (_passwd_stat.stat.exists | default(false)) or (_passwd_stat.stat.size | default(0) | int) == 0
+      tags: [always]
+
+    - name: "Прочитать локальный файл паролей"
+      ansible.builtin.slurp:
+        src: "{{ playbook_dir }}/passwd"
+      register: _passwd_local
+      delegate_to: localhost
+      # Повышение прав задано на весь плейбук и распространилось бы на эту задачу,
+      # то есть файл читался бы под sudo на управляющей машине. Для файла с правами
+      # 644 это не нужно, а если sudo там спросит пароль — чтение молча не состоится.
+      become: false
+      # Однократное выполнение здесь было бы опасно: оно берёт первый узел игры,
+      # и условие ниже вычислялось бы для него — при ином порядке узлов в инвентаре
+      # задача пропустилась бы для всех, оставив проверку без данных.
+      failed_when: false
+      when: proxy_role == 'access' and enable_auth | default(false) | bool
+      tags: [always]
+
+    - name: "Проверить наличие учётных записей в файле паролей"
+      ansible.builtin.assert:
+        that:
+          - _passwd_local.content is defined
+          - (_passwd_local.content | b64decode).splitlines()
+            | map('trim') | reject('eq', '') | reject('match', '#')
+            | list | length > 0
+        fail_msg: >-
+          Проверка подлинности включена, но содержимое файла паролей получить
+          не удалось. Причина от Ansible: {{ _passwd_local.msg | default('не сообщена —
+          значит файл прочитан, но пуст либо состоит из одних комментариев') }}.
+          Осмотр пути: файл существует — {{ _passwd_stat.stat.exists | default('осмотр не выполнен') }}, размер — {{ _passwd_stat.stat.size | default('—') }}, права — {{ _passwd_stat.stat.mode | default('—') }}.
+          Ожидаемый путь: {{ playbook_dir }}/passwd на управляющей машине, читается
+          без повышения прав. Развернуть без записей можно, но подключиться не смог бы
+          никто: сверять пароль не с чем, и все обращения получали бы 407.
+          Завести запись: htpasswd -B -C 12 -bn пользователь пароль >> passwd
+        success_msg: "Файл паролей содержит учётные записи."
+      # Без run_once: при однократном выполнении условие берётся по первому узлу игры,
+      # и при ином порядке групп проверка пропустилась бы для всех access-узлов.
+      delegate_to: localhost
+      when: proxy_role == 'access' and enable_auth | default(false) | bool
+      tags: [always]
+
+    # AI-GENERATED — NOT REVIEWED: SECTION START
+    # Пользователь группы без записи в файле паролей получил бы 407 при любом
+    # пароле: пул, к которому он приписан, работал бы вхолостую. Проверка идёт до
+    # рендера конфигурации (роли подключаются позже этой задачи).
+    - name: "Проверить, что пользователи групп есть в файле паролей"
+      ansible.builtin.assert:
+        that:
+          - (proxy_user_groups | default({}) | aiproxy_group_users)
+            | difference(_passwd_local.content | b64decode | aiproxy_passwd_users) | length == 0
+        fail_msg: >-
+          В файле паролей нет записей для пользователей из proxy_user_groups:
+          {{ (proxy_user_groups | default({}) | aiproxy_group_users)
+             | difference(_passwd_local.content | b64decode | aiproxy_passwd_users) | sort | join(', ') }}.
+          Заведите записи (htpasswd -B -C 12 -bn пользователь пароль >> passwd)
+          либо уберите имена из групп.
+        success_msg: "Все пользователи групп есть в файле паролей."
+      # Без run_once: при однократном выполнении условие берётся по первому узлу игры,
+      # и при ином порядке групп проверка пропустилась бы для всех access-узлов.
+      delegate_to: localhost
+      when: proxy_role == 'access' and enable_auth | default(false) | bool
+      tags: [always]
+    # AI-GENERATED — NOT REVIEWED: SECTION END
 
     - name: "Определить домен fake-TLS MTProxy с учётом inventory"
       ansible.builtin.set_fact:
@@ -715,64 +824,6 @@
         - squid_transit_tls | bool
         - not ansible_check_mode
 
-    - name: "Проверить наличие и свойства локального файла паролей"
-      ansible.builtin.stat:
-        path: "{{ playbook_dir }}/passwd"
-      register: _passwd_stat
-      delegate_to: localhost
-      become: false
-      failed_when: false
-      when: proxy_role == 'access' and enable_auth | default(false) | bool
-
-    - name: "Показать свойства локального файла паролей"
-      ansible.builtin.debug:
-        msg: >-
-          Каталог плейбука: {{ playbook_dir }} ·
-          ожидаемый файл: {{ playbook_dir }}/passwd ·
-          существует: {{ _passwd_stat.stat.exists | default('осмотр не выполнен') }} ·
-          размер: {{ _passwd_stat.stat.size | default('—') }} ·
-          права: {{ _passwd_stat.stat.mode | default('—') }} ·
-          ссылка: {{ _passwd_stat.stat.islnk | default('—') }}
-      when:
-        - proxy_role == 'access' and enable_auth | default(false) | bool
-        - not (_passwd_stat.stat.exists | default(false)) or (_passwd_stat.stat.size | default(0) | int) == 0
-
-    - name: "Прочитать локальный файл паролей"
-      ansible.builtin.slurp:
-        src: "{{ playbook_dir }}/passwd"
-      register: _passwd_local
-      delegate_to: localhost
-      # Повышение прав задано на весь плейбук и распространилось бы на эту задачу,
-      # то есть файл читался бы под sudo на управляющей машине. Для файла с правами
-      # 644 это не нужно, а если sudo там спросит пароль — чтение молча не состоится.
-      become: false
-      # Однократное выполнение здесь было бы опасно: оно берёт первый узел игры,
-      # и условие ниже вычислялось бы для него — при ином порядке узлов в инвентаре
-      # задача пропустилась бы для всех, оставив проверку без данных.
-      failed_when: false
-      when: proxy_role == 'access' and enable_auth | default(false) | bool
-
-    - name: "Проверить наличие учётных записей в файле паролей"
-      ansible.builtin.assert:
-        that:
-          - _passwd_local.content is defined
-          - (_passwd_local.content | b64decode).splitlines()
-            | map('trim') | reject('eq', '') | reject('match', '#')
-            | list | length > 0
-        fail_msg: >-
-          Проверка подлинности включена, но содержимое файла паролей получить
-          не удалось. Причина от Ansible: {{ _passwd_local.msg | default('не сообщена —
-          значит файл прочитан, но пуст либо состоит из одних комментариев') }}.
-          Осмотр пути: файл существует — {{ _passwd_stat.stat.exists | default('осмотр не выполнен') }}, размер — {{ _passwd_stat.stat.size | default('—') }}, права — {{ _passwd_stat.stat.mode | default('—') }}.
-          Ожидаемый путь: {{ playbook_dir }}/passwd на управляющей машине, читается
-          без повышения прав. Развернуть без записей можно, но подключиться не смог бы
-          никто: сверять пароль не с чем, и все обращения получали бы 407.
-          Завести запись: htpasswd -B -C 12 -bn пользователь пароль >> passwd
-        success_msg: "Файл паролей содержит учётные записи."
-      delegate_to: localhost
-      run_once: true
-      when: proxy_role == 'access' and enable_auth | default(false) | bool
-
     - name: "Настроить системные пределы ulimit"
       ansible.builtin.copy:
         dest: /etc/security/limits.d/99-proxy.conf
@@ -1115,13 +1166,15 @@
     # ===========================================================================
 
     # Прямой access настраивается здесь; при nginx_on_443 конфиг уже размещён ролью nginx.
+    # Права 0640 root:proxy: конфигурация access несёт имена пользователей пулов (ACL
+    # proxy_auth), а рабочий процесс Squid перечитывает её под группой proxy.
     - name: "Разместить конфигурацию прямого Squid на access"
       ansible.builtin.template:
         src: templates/squid-access.conf.j2
         dest: "{{ squid_config_path }}"
         owner: root
-        group: root
-        mode: '0644'
+        group: proxy
+        mode: '0640'
         validate: 'squid -k parse -f %s'
       when: proxy_role == 'access' and not (nginx_on_443 | bool)
       register: squid_config_access

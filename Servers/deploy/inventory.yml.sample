@@ -1,4 +1,5 @@
 ---
+# [AITS] 2026-11-06T14:39:40Z
 # Полный образец параметров ai-proxy. Создать рабочий файл:
 #   cp inventory.yml.sample inventory.yml
 # inventory.yml целиком исключён из Git; реальные адреса и секреты задавайте в нём.
@@ -13,9 +14,6 @@ all:
     access_proxies:
       hosts:
         access-01:
-          # Необязательный пул Squid для этого access; по умолчанию вся группа upstreams.
-          # Позволяет исключить неисправную связь; нужны существующие имена без повторов.
-          # squid_upstream_hosts: [upstream-01, upstream-02]
           # IP HTTP-01 для соседних access; по умолчанию ansible_host.
           # Нужен, если SSH использует DNS-имя или отдельный управляющий адрес.
           # Только IPv4/IPv6 без порта; адрес должен быть доступен соседям на 80/tcp.
@@ -54,6 +52,26 @@ all:
         # Loopback-порт Squid; используется также fallback общего SNI router
         # и HTTPS-терминатором. Должен отличаться от остальных слушателей узла.
         squid_local_port: 3128
+
+        # Пулы: группа пользователей -> пул -> набор upstream. Параметры общие для
+        # всех access: переопределения на узел нет. Пользователь получает объединение
+        # upstream всех пулов, куда входит его группа; без upstream — отказ 403.
+        # Группы пользователей: имя группы -> имена из deploy/passwd. По умолчанию {}.
+        # Имя «all» зарезервировано и означает всех пользователей файла паролей.
+        # proxy_user_groups:
+        #   team-a: [alice, bob]
+        #   team-b: [carol]
+        # Пулы: ключи ровно name, groups, upstreams. groups — имена групп или all;
+        # upstreams — 'all' (вся группа upstreams) либо список имён без повторов.
+        # Умолчание — два пула: default для всех пользователей на все upstream
+        # и reserve, пустой и по пользователям, и по upstream.
+        # proxy_pools:
+        #   - {name: default, groups: [all], upstreams: all}
+        #   - {name: reserve, groups: [], upstreams: []}
+        # Пример: team-a идёт через upstream-01, team-b — через оба.
+        # proxy_pools:
+        #   - {name: alpha, groups: [team-a], upstreams: [upstream-01]}
+        #   - {name: beta, groups: [team-b], upstreams: [upstream-01, upstream-02]}
 
         # Зашифрованный клиентский вход через SNI на общем 443; по умолчанию false.
         # Общие значения включают HTTPS на обоих access, соответствующих A/AAAA имени.

@@ -1,3 +1,4 @@
+# [AITS] 2026-11-06T15:20:32Z
 """Native Linux regression: rendered Squid/nginx/mtg, idle relay and cgroup caps.
 
 Requires prepare_native_validation.py, then run as root in an isolated network:
@@ -33,9 +34,19 @@ spec.loader.exec_module(resources)
 mtproxy_spec = importlib.util.spec_from_file_location('mtproxy_policy', DEPLOY/'filter_plugins/mtproxy.py')
 mtproxy_policy = importlib.util.module_from_spec(mtproxy_spec)
 mtproxy_spec.loader.exec_module(mtproxy_policy)
+# AI-GENERATED — NOT REVIEWED: SECTION START
+# Пулы нужны шаблону access: без _squid_pools он (по барьеру шаблона) не рендерится.
+pools_spec = importlib.util.spec_from_file_location('pools', DEPLOY/'filter_plugins/pools.py')
+pools = importlib.util.module_from_spec(pools_spec)
+pools_spec.loader.exec_module(pools)
+# AI-GENERATED — NOT REVIEWED: SECTION END
 ENV = jinja2.Environment(trim_blocks=True, keep_trailing_newline=True)
 ENV.filters.update(bool=resources.as_bool, squid_duration_seconds=resources.squid_duration_seconds,
                    mtproxy_nodes=mtproxy_policy.mtproxy_nodes)
+# AI-GENERATED — NOT REVIEWED: SECTION START
+# Фильтр Ansible to_json нужен шаблонам резолвера (unbound, dnsproxy); семантика — json.dumps.
+ENV.filters['to_json'] = json.dumps
+# AI-GENERATED — NOT REVIEWED: SECTION END
 
 
 def render(template, values):
@@ -116,6 +127,12 @@ def main():
                   groups={'access_proxies':['access'], 'upstreams':['up']},
                   hostvars={'access': {'ansible_host':'127.0.0.1'},
                             'up':{'ansible_host':'127.0.0.1', 'proxy_port':443, 'mtproxy_enabled':True}},
+                  # AI-GENERATED — NOT REVIEWED: SECTION START
+                  # Умолчательные пулы: все пользователи -> все upstream (up) и пустой резервный.
+                  _squid_pools=pools.aiproxy_pools(
+                      [{'name': 'default', 'groups': ['all'], 'upstreams': 'all'},
+                       {'name': 'reserve', 'groups': [], 'upstreams': []}], {}, ['up']),
+                  # AI-GENERATED — NOT REVIEWED: SECTION END
                   squid_local_port=3128, squid_mgmt_port=3129, enable_auth=False,
                   mtproxy_local_port=2083, squid_tls_term_port=4444,
                   mtproxy_tls_port=4443, mtproxy_relay_port=9443, mtproxy_hostname='public-proxy.example',

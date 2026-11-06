@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# [AITS] 2026-11-06T15:09:32Z
 """Render public configuration examples locally, without reading live inventory."""
 import argparse
 import ipaddress
@@ -63,7 +64,11 @@ def build(output):
     dns = load(DEPLOY / 'roles/dns_resolver/tasks/main.yml')
     tasks = [fact(source['pre_tasks'], key) for key in (
         'cpu_cores', '_proxy_enabled_services', '_proxy_minimum_plan', '_proxy_budget',
-        'mem_allocatable_mb', '_proxy_memory_plan', 'mem_squid_mb', 'squid_workers')]
+        'mem_allocatable_mb', '_proxy_memory_plan', 'mem_squid_mb', 'squid_workers',
+        # AI-GENERATED — NOT REVIEWED: SECTION START
+        '_squid_pools',
+        # AI-GENERATED — NOT REVIEWED: SECTION END
+        )]
     tasks += [fact(resources, '_proxy_resource_units'), fact(dns, '_dns_threads'),
               fact(dns, '_dns_allowed_clients')]
     tasks.append({'name': 'Подготовить локальный контекст примера', 'ansible.builtin.set_fact': {
