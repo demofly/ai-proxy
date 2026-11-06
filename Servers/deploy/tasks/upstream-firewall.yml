@@ -1,10 +1,35 @@
 ---
+# [AITS] 2026-11-06T11:06:23Z
 - name: "Проверить состояние UFW"
   ansible.builtin.shell: |
     ufw status 2>/dev/null | grep -q '^Status: active' && echo 'active' || echo 'inactive'
   register: ufw_status
   changed_when: false
   failed_when: false
+
+# AI-GENERATED — NOT REVIEWED: SECTION START
+# Порты SSH берутся из действующей конфигурации sshd, а не принимаются за 22:
+# узел с sshd на ином порту под `policy drop` терял бы доступ после прогона.
+# `sshd -T` печатает и `port N`, и `listenaddress адрес:N` — учитываются оба.
+- name: "Определить действующие порты SSH"
+  ansible.builtin.shell: |
+    /usr/sbin/sshd -T 2>/dev/null | awk '$1 == "port" {print $2} $1 == "listenaddress" {n = split($2, a, ":"); print a[n]}'
+  register: _proxy_sshd_ports
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: proxy_role == 'upstream'
+
+# Порт подключения Ansible разрешается всегда: без него прогон, не сумевший
+# прочитать sshd, отрезал бы собственный канал управления.
+- name: "Составить перечень разрешаемых портов SSH"
+  ansible.builtin.set_fact:
+    # Отсортированные уникальные TCP-порты SSH узла.
+    _proxy_ssh_ports: >-
+      {{ ((_proxy_sshd_ports.stdout_lines | default([]) | select('match', '^[0-9]+$') | map('int') | list)
+          + [ansible_port | default(22) | int]) | unique | sort }}
+  when: proxy_role == 'upstream'
+# AI-GENERATED — NOT REVIEWED: SECTION END
 
 # ===========================================================================
 # Phase: Firewall (upstream only)
@@ -24,8 +49,9 @@
     - name: "Разрешить SSH в UFW"
       community.general.ufw:
         rule: allow
-        port: '22'
+        port: "{{ item | string }}"
         proto: tcp
+      loop: "{{ _proxy_ssh_ports }}"
 
     - name: "Разрешить Squid только для access в UFW"
       community.general.ufw:

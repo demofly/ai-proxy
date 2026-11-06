@@ -1,8 +1,10 @@
+# [AITS] 2026-11-06T11:07:00Z
 """Authorization matrix and fail-fast behavior of actual firewall templates/tasks."""
 from pathlib import Path
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -14,6 +16,9 @@ import yaml
 DEPLOY = Path(__file__).resolve().parents[1]
 ENV = jinja2.Environment()
 ENV.filters['bool'] = bool
+# Тесты Ansible `search`/`match`, нужные шаблону nftables, — с той же семантикой.
+ENV.tests['search'] = lambda value, pattern: re.search(pattern, value) is not None
+ENV.tests['match'] = lambda value, pattern: re.match(pattern, value) is not None
 SPEC = importlib.util.spec_from_file_location('firewall_resources', DEPLOY/'filter_plugins/resources.py')
 RESOURCES = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(RESOURCES)
@@ -72,6 +77,34 @@ class FirewallTests(unittest.TestCase):
                     self.assertEqual(verdict(rules, '198.51.100.10', 8443), 'DROP')
                     self.assertEqual(verdict(rules, '198.51.100.10', 53), 'DROP')
                     self.assertEqual(verdict(rules, '198.51.100.10', 53, 'udp'), 'DROP')
+
+    # AI-GENERATED — NOT REVIEWED: SECTION START
+    def test_nft_allows_the_actual_ssh_ports_instead_of_22(self):
+        values = dict(proxy_port=443, groups={'access_proxies':['access']},
+                      hostvars={'access':{'ansible_host':'198.51.100.10'}},
+                      dns_allowed_clients=['198.51.100.10'], inventory_hostname='up', ansible_host='192.0.2.1')
+        template = ENV.from_string((DEPLOY/'templates/nftables-upstream.conf.j2').read_text())
+        # Перечень портов из sshd -T и ansible_port попадает в правило целиком.
+        rendered = template.render(values, _proxy_ssh_ports=[2222, 2223])
+        self.assertIn('tcp dport { 2222, 2223 } accept', rendered)
+        self.assertNotIn('tcp dport 22 accept', rendered)
+        # Без собранного перечня правило держится порта подключения Ansible.
+        self.assertIn('tcp dport { 2222 } accept', template.render(values, ansible_port=2222))
+
+    @unittest.skipUnless(os.name == 'posix', 'requires bash')
+    def test_ssh_ports_are_read_from_port_and_listenaddress(self):
+        tasks = yaml.safe_load((DEPLOY/'tasks/upstream-firewall.yml').read_text())
+        task = next(t for t in tasks if t.get('name') == 'Определить действующие порты SSH')
+        with tempfile.TemporaryDirectory(prefix='aiproxy-sshd-') as temp:
+            # Подставной sshd печатает фрагмент реального вывода `sshd -T`.
+            fake = Path(temp)/'sshd'
+            fake.write_text('#!/bin/sh\nprintf "port 2222\\naddressfamily any\\n'
+                            'listenaddress [::]:2222\\nlistenaddress 0.0.0.0:2200\\n"\n')
+            fake.chmod(0o755)
+            script = task['ansible.builtin.shell'].replace('/usr/sbin/sshd', str(fake))
+            result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, check=True)
+        self.assertEqual(result.stdout.split(), ['2222', '2222', '2200'])
+    # AI-GENERATED — NOT REVIEWED: SECTION END
 
     @unittest.skipUnless(os.name == 'posix', 'requires bash')
     def test_failed_restore_cannot_be_hidden_by_a_successful_followup(self):

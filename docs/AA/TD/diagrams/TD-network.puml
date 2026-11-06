@@ -1,4 +1,5 @@
 @startuml TD-network
+' [AITS] 2026-11-06T11:08:44Z
 !theme plain
 skinparam backgroundColor #FEFEFE
 skinparam defaultFontName "Segoe UI"
@@ -117,8 +118,8 @@ nf1 .[#666666].> p_443_u1 : межсетевой экран\n(только IP ac
 nf1 .[#666666].> dns_u1 : 53/tcp и 53/udp\n(только IP access-нод)
 
 ' DevOps
-devops -[#9C27B0]-> an1 : SSH :22\n(Ansible)
-devops -[#9C27B0]-> un1 : SSH :22\n(Ansible)
+devops -[#9C27B0]-> an1 : SSH :ansible_port\n(Ansible)
+devops -[#9C27B0]-> un1 : SSH :ansible_port\n(Ansible)
 
 ' --- Легенда ---
 legend right
@@ -127,7 +128,7 @@ legend right
   |<#0D47A1> сплошная | Telegram (fake-TLS :443 → relay → upstream) |
   |<#1565C0> сплошная | Access → Upstream (cache_peer :443) |
   |<#E65100> сплошная | Upstream → внешний API / Telegram DC |
-  |<#9C27B0> сплошная | DevOps SSH :22 (Ansible) |
+  |<#9C27B0> сплошная | DevOps SSH :ansible_port (Ansible) |
   |<#FF6F00> пунктир | VRRP heartbeat (proto 112) |
   |<#388E3C> пунктир | Keepalived управление (control plane) |
   |<#666666> пунктир | CrowdSec / Firewall (control plane) |

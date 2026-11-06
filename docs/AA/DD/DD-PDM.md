@@ -1,8 +1,8 @@
 <!-- [AIGD] -->
-<!-- [AITS] 2026-08-30T11:52:49Z -->
+<!-- [AITS] 2026-11-06T11:08:38Z -->
 # DD-PDM — Физическая модель данных
 
-**Последняя правка AI:** 2026-10-19
+**Последняя правка AI:** 2026-11-06T11:08:38Z
 
 ## Описание
 
@@ -121,7 +121,7 @@ table inet filter {
     chain input {
         type filter hook input priority 0; policy accept;
         iif lo return
-        tcp dport 22 accept
+        tcp dport { порты SSH } accept
         ip saddr @dns_clients tcp dport 53 accept
         ip saddr @dns_clients udp dport 53 accept
         tcp dport 53 drop

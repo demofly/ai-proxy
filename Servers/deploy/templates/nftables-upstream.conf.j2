@@ -1,4 +1,5 @@
 #!/usr/sbin/nft -f
+# [AITS] 2026-11-06T11:06:23Z
 # nftables Configuration - Upstream Proxy
 # Managed by Ansible - DO NOT EDIT MANUALLY
 # Host: {{ inventory_hostname }} ({{ ansible_host }})
@@ -56,8 +57,8 @@ table inet filter {
         # Allow loopback (Squid resolves through 127.0.0.1:53)
         iif "lo" accept
 
-        # Allow SSH
-        tcp dport 22 accept
+        # Allow SSH on the ports sshd actually listens on (+ Ansible's own port)
+        tcp dport { {{ _proxy_ssh_ports | default([ansible_port | default(22)]) | join(', ') }} } accept
 
         # Allow Squid only from access proxies
 {% for host in groups['access_proxies'] %}
