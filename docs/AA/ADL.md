@@ -1,7 +1,7 @@
 <!-- [AIGD] -->
 # ADL — Журнал архитектурных решений
 
-**Последняя правка AI:** 2026-08-29T07:00:00Z
+**Последняя правка AI:** 2026-11-06T14:34:01Z
 
 ## Реестр ADR
 
@@ -16,16 +16,17 @@
 | ADR-000007 | Ansible как IaC-инструмент | Implemented | 2025-01-10 | Capability × Technology | [ADR-000007](ADR/ADR-000007.md) |
 | ADR-000008 | Бюджет памяти узла: пределы служб с двукратным запасом и проверка выполнимости | Implemented | 2026-08-28 | Capability × Technology | [ADR-000008](ADR/ADR-000008.md) |
 | ADR-000009 | Собственный кеширующий резолвер с каскадом access → upstream | Active | 2026-08-29 | Capability × Technology | [ADR-000009](ADR/ADR-000009.md) |
+| ADR-000010 | Пулы пользователей: объединение наборов upstream, общие access | Active | 2026-11-06 | Capability × Application | [ADR-000010](ADR/ADR-000010.md) |
 
 ## Статистика
 
 | Статус | Количество |
 |---|---|
-| Active | 9 |
+| Active | 10 |
 | Proposed | 0 |
 | Deprecated | 0 |
 | Retired | 0 |
-| **Итого** | **9** |
+| **Итого** | **10** |
 
 ## Классификация
 

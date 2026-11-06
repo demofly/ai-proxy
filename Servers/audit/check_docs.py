@@ -1,4 +1,4 @@
-# [AITS] 2026-08-29T00:42:01Z
+# [AITS] 2026-11-06T17:49:09Z
 # -*- coding: utf-8 -*-
 # AI-GENERATED — NOT REVIEWED: SECTION START
 """Сплошная проверка корпуса архитектурной документации docs/AA.
@@ -15,8 +15,10 @@
   * двунаправленность межслойных связей карточек C1-C4;
   * объёмы файлов, заявленные карточками уровня кода;
   * отсутствие значений рабочего инвентори в отслеживаемых файлах;
+  * безличные имена узлов рабочего инвентори (access-NN, upstream-NN);
   * имена юнитов systemd, названные в документации, существуют в коде;
-  * изоляция эксплуатационной документации — в docs/user нет реестровых ID.
+  * изоляция эксплуатационной документации — в docs/user нет реестровых ID;
+  * в документации администратора и пользователя нет сценариев Python разработчика.
 
 Выход: 0 — нарушений нет, 1 — есть. Итог печатается тремя числами
 (выполнено / пропущено с причиной / открыто), чтобы слово «зелено» не подменяло счёт.
@@ -276,6 +278,13 @@ LEAK_ALLOWED_PREFIXES = ("192.0.2.", "198.51.100.", "203.0.113.", "10.", "172.16
 
 EXAMPLE_INVENTORY = os.path.join(REPO, "Servers", "deploy", "inventory.yml.sample")
 
+# Безличная схема имён узлов: роль и двузначный номер. Имя не несёт ни страны, ни
+# поставщика, поэтому его появление в коммите либо документе ничего не раскрывает.
+IMPERSONAL_HOST_RE = re.compile(r"^(access|upstream)-\d{2}$")
+
+# Группа инвентори -> обязательный префикс имени её узлов.
+HOST_GROUP_PREFIX = {"access_proxies": "access", "upstreams": "upstream"}
+
 
 def collect_example_values():
     """Собирает значения и имена из образца инвентори: они опубликованы намеренно."""
@@ -308,7 +317,8 @@ def collect_working_values():
         host = LEAK_HOST_RE.match(line)
         if host:
             name = host.group(1)
-            if name not in INVENTORY_KEYWORDS:
+            # Безличное имя по схеме ничего не раскрывает и упоминается свободно.
+            if name not in INVENTORY_KEYWORDS and not IMPERSONAL_HOST_RE.match(name):
                 values.add(name)
             continue
         found = LEAK_VALUE_RE.search(line)
@@ -357,6 +367,32 @@ def check_working_values_not_leaked(problems, skipped):
             if value in content:
                 problems.append("значение рабочего инвентори в отслеживаемом файле: "
                                 "%s в %s" % (value, rel_path))
+
+
+def check_inventory_host_names(problems, skipped):
+    """Проверяет, что узлы рабочего инвентори названы по безличной схеме роль-NN.
+
+    Имя узла попадает в текст коммитов, журналы развёртывания и имена пиров Squid.
+    Имя с кодом страны и поставщика раскрывало расположение узла в уже отправленном
+    коммите, а перезапись отправленной истории раскрытия не отменяет. Безличное имя
+    делает такое упоминание безвредным, поэтому проверяется само имя, а не каждый текст.
+    """
+    if not os.path.exists(INVENTORY):
+        skipped.append("имена узлов рабочего инвентори: файл отсутствует (нечего сверять)")
+        return
+    try:
+        import yaml  # разбор вложенных групп; без PyYAML проверка пропускается с причиной
+    except ImportError:
+        skipped.append("имена узлов рабочего инвентори: PyYAML не установлен")
+        return
+    # Группы верхнего уровня all.children; узлы группы — ключи её отображения hosts.
+    children = ((yaml.safe_load(read(INVENTORY)) or {}).get("all") or {}).get("children") or {}
+    for group, prefix in sorted(HOST_GROUP_PREFIX.items()):
+        hosts = (children.get(group) or {}).get("hosts") or {}
+        for name in sorted(hosts):
+            if not (IMPERSONAL_HOST_RE.match(name) and name.startswith(prefix + "-")):
+                problems.append("имя узла рабочего инвентори не по схеме %s-NN: %s (группа %s)"
+                                % (prefix, name, group))
 
 
 # Имя юнита в команде управления службой: systemctl <действие> <имя>.
@@ -477,6 +513,44 @@ def check_user_docs_isolation(problems, skipped):
     for path in collect_markdown(USER_DOCS):
         for found in set(ID_RE.findall(read(path))):
             problems.append("реестровый идентификатор в ЭД: %s в %s" % (found, rel(path)))
+
+
+# Документация администратора и пользователя: ЭД и инструкции рядом с поставляемыми файлами.
+USER_FACING_DOCS = [
+    os.path.join("Servers", "deploy", "README.md"),
+    os.path.join("Servers", "deploy", "MTProxy.md"),
+    os.path.join("Servers", "examples", "README.md"),
+    os.path.join("Clients", "README.md"),
+    os.path.join("Clients", "FoxyProxy", "README.md"),
+]
+
+# Упоминание сценария Python разработчика: имя файла .py либо запуск unittest.
+DEV_SCRIPT_RE = re.compile(r"[A-Za-z0-9_./-]+\.py\b|\bunittest\b")
+
+# Пользовательская операция на Python, которой нет замены без сценария: обновление
+# правил в собственном экспорте FoxyProxy.
+DEV_SCRIPT_ALLOWED = ("rules.py --merge",)
+
+
+def check_no_dev_scripts_in_user_docs(problems, skipped):
+    """Сценарии Python разработчика не упоминаются в документации администратора и пользователя.
+
+    Тесты, нативные проверки, генераторы и барьеры нужны только разработчику, их место —
+    docs/dev. В руководстве они подменяют процедуру эксплуатации проверкой кода.
+    """
+    paths = [os.path.join(REPO, rel_path) for rel_path in USER_FACING_DOCS]
+    if os.path.isdir(USER_DOCS):
+        paths += collect_markdown(USER_DOCS)
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
+        for number, line in enumerate(read(path).splitlines(), 1):
+            if any(allowed in line for allowed in DEV_SCRIPT_ALLOWED):
+                continue
+            found = DEV_SCRIPT_RE.search(line)
+            if found:
+                problems.append("сценарий разработчика в документации пользователя: %s в %s:%d"
+                                % (found.group(0), rel(path), number))
 
 
 def check_gap_backlinks(docs, problems, skipped):
@@ -678,31 +752,41 @@ def main():
     problems = []   # нарушения, требующие правки
     skipped = []    # проверки, не выполненные с названной причиной
     docs = collect_markdown(AA)
+    counts = {}     # число отрисовок диаграмм, возвращаемое проверкой пар
 
-    check_links(docs, problems)
-    check_ids(docs, collect_defined_ids(docs), problems)
-    check_id_collisions(docs, problems)
-    check_table_shape(docs, problems)
-    check_bidirectional(docs, problems)
-    check_declared_sizes(docs, problems, skipped)
-    check_working_values_not_leaked(problems, skipped)
-    check_unit_names(docs, problems, skipped)
-    diagrams = check_diagrams(problems, skipped)
-    check_conventions(docs, problems, skipped)
-    check_user_docs_isolation(problems, skipped)
-    check_gap_backlinks(docs, problems, skipped)
-    check_generated_fresh(problems, skipped)
-    check_dead_templates(problems, skipped)
-    check_repo_paths(docs, problems)
-    check_unused_handlers(problems, skipped)
+    # Перечень проверок; число выполненных в итоге — длина этого перечня, а не литерал,
+    # иначе добавленная проверка не попадала бы в счёт.
+    checks = [
+        lambda: check_links(docs, problems),
+        lambda: check_ids(docs, collect_defined_ids(docs), problems),
+        lambda: check_id_collisions(docs, problems),
+        lambda: check_table_shape(docs, problems),
+        lambda: check_bidirectional(docs, problems),
+        lambda: check_declared_sizes(docs, problems, skipped),
+        lambda: check_working_values_not_leaked(problems, skipped),
+        lambda: check_inventory_host_names(problems, skipped),
+        lambda: check_unit_names(docs, problems, skipped),
+        lambda: counts.update(diagrams=check_diagrams(problems, skipped)),
+        lambda: check_conventions(docs, problems, skipped),
+        lambda: check_user_docs_isolation(problems, skipped),
+        lambda: check_no_dev_scripts_in_user_docs(problems, skipped),
+        lambda: check_gap_backlinks(docs, problems, skipped),
+        lambda: check_generated_fresh(problems, skipped),
+        lambda: check_dead_templates(problems, skipped),
+        lambda: check_repo_paths(docs, problems),
+        lambda: check_unused_handlers(problems, skipped),
+    ]
+    for check in checks:
+        check()
 
-    print("Проверено: %d карточек, %d диаграмм" % (len(docs), diagrams))
+    print("Проверено: %d карточек, %d диаграмм" % (len(docs), counts["diagrams"]))
     for line in skipped:
         print("  пропущено: %s" % line)
     for line in problems:
         print("  НАРУШЕНИЕ: %s" % line)
     # Итог тремя числами: выполнено — число прогнанных проверок, а не «всё хорошо».
-    print("Итог: выполнено 16 / пропущено с причиной %d / открыто %d" % (len(skipped), len(problems)))
+    print("Итог: выполнено %d / пропущено с причиной %d / открыто %d"
+          % (len(checks), len(skipped), len(problems)))
     return 1 if problems else 0
 
 

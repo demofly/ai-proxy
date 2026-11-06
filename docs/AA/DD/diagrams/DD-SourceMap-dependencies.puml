@@ -1,4 +1,5 @@
 @startuml DD-SourceMap-dependencies
+' [AITS] 2026-11-06T15:25:09Z
 !theme plain
 skinparam backgroundColor #FEFEFE
 skinparam defaultFontName "Segoe UI"
@@ -8,6 +9,9 @@ title Граф зависимостей данных\nInventory → Configs → 
 
 ' --- SSOT ---
 artifact "inventory.yml\n(SSOT)" as inv #FFF9C4
+
+' --- Проверка и разрешение модели пулов ---
+component "Фильтр aiproxy_pools\n(filter_plugins/pools.py)" as pools_filter #FFF3E0
 
 ' --- Jinja2 Templates ---
 rectangle "Jinja2 Templates" as j2 #E8F5E9 {
@@ -50,7 +54,9 @@ rectangle "Анализ и enforcement" as analysis #F3E5F5 {
 
 ' === Потоки ===
 
-' inventory -> templates
+' inventory -> filter -> templates
+inv --> pools_filter : proxy_user_groups,\nproxy_pools
+pools_filter --> squid_a_j2 : _squid_pools
 inv --> squid_a_j2
 inv --> squid_u_j2
 inv --> ka_j2
@@ -62,7 +68,7 @@ inv --> nx_mtp_j2
 inv --> nft_j2
 
 ' templates -> configs
-squid_a_j2 --> squid_access : ACL, auth_param,\ncache_peer
+squid_a_j2 --> squid_access : ACL, auth_param,\ncache_peer, пулы\n(cache_peer_access)
 squid_u_j2 --> squid_upstream : ACL src
 
 ka_j2 --> ka_conf

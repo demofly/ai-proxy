@@ -1,4 +1,5 @@
 @startuml DD-CDM
+' [AITS] 2026-11-06T15:25:09Z
 !theme plain
 skinparam linetype ortho
 skinparam padding 4
@@ -51,6 +52,27 @@ entity "CrowdSec" as CrowdSec {
   блокировка угроз
 }
 
+entity "Группа пользователей" as UserGroup {
+  Именованный набор
+  пользователей
+}
+
+entity "Пул" as Pool {
+  Связь групп
+  с набором upstream
+}
+
+entity "Набор upstream\nпользователя" as UserUpstreamSet {
+  Объединение upstream
+  пулов пользователя
+  (выводится)
+}
+
+entity "Upstream Proxy" as UpstreamProxy {
+  Squid на upstream tier
+  (выходной узел)
+}
+
 User "1" -- "1" Credential : имеет >
 Config "1" -- "*" DomainList : определяет >
 Config "1" -- "*" ACL : определяет >
@@ -61,5 +83,13 @@ User "*" -- "1" AccessProxy : подключается к >
 Credential "*" -- "1" AccessProxy : используется >
 DomainList "*" -- "1" AccessProxy : применяется к >
 ACL "*" -- "1" AccessProxy : ограничивает доступ >
+Config "1" -- "*" UserGroup : определяет >
+Config "1" -- "*" Pool : определяет >
+UserGroup "*" -- "*" Credential : включает >
+Pool "*" -- "*" UserGroup : охватывает >
+Pool "*" -- "*" UpstreamProxy : направляет через >
+User "1" -- "1" UserUpstreamSet : получает >
+UserUpstreamSet "*" -- "1" AccessProxy : ограничивает >
+AccessProxy "*" -- "*" UpstreamProxy : пересылает через >
 
 @enduml

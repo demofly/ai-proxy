@@ -1,4 +1,5 @@
 @startuml DD-LDM
+' [AITS] 2026-11-06T15:25:09Z
 !theme plain
 skinparam linetype ortho
 skinparam padding 4
@@ -56,6 +57,44 @@ entity "Secret" as secret {
   * scope : enum {access, upstream, global}
 }
 
+entity "User Group" as ugroup {
+  * **group_name** : string <<PK>>
+}
+
+entity "Group Member" as gmember {
+  * **group_name** : string <<PK, FK>>
+  * **username** : string <<PK, FK>>
+}
+
+entity "Upstream Host" as uphost {
+  * **host_name** : string <<PK>>
+  --
+  * ansible_host : string
+  * proxy_port : integer
+}
+
+entity "Pool" as pool {
+  * **pool_name** : string <<PK>>
+  --
+  * all_users : boolean
+  * all_upstreams : boolean
+}
+
+entity "Pool Group" as pgroup {
+  * **pool_name** : string <<PK, FK>>
+  * **group_name** : string <<PK, FK>>
+}
+
+entity "Pool Upstream" as pupstream {
+  * **pool_name** : string <<PK, FK>>
+  * **host_name** : string <<PK, FK>>
+}
+
+entity "User Upstream\n(выводимая)" as uupstream {
+  * **username** : string <<PK, FK>>
+  * **host_name** : string <<PK, FK>>
+}
+
 note right of cred
   Хранится в формате htpasswd
   (NCSA auth: user:$2y$12$хеш bcrypt)
@@ -75,5 +114,18 @@ cred "1" -- "*" log : username >
 config "1" -- "*" domain : определяет >
 config "1" -- "*" acl : определяет >
 config "1" -- "*" secret : содержит >
+ugroup::group_name "1" -- "*" gmember::group_name
+cred::username "1" -- "*" gmember::username
+pool::pool_name "1" -- "*" pgroup::pool_name
+ugroup::group_name "1" -- "*" pgroup::group_name
+pool::pool_name "1" -- "*" pupstream::pool_name
+uphost::host_name "1" -- "*" pupstream::host_name
+cred::username "1" -- "*" uupstream::username
+uphost::host_name "1" -- "*" uupstream::host_name
+
+note bottom of uupstream
+  Объединение upstream пулов пользователя.
+  Пустой набор — отказ HTTP 403.
+end note
 
 @enduml

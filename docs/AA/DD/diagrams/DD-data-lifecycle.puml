@@ -1,4 +1,5 @@
 @startuml DD-data-lifecycle
+' [AITS] 2026-11-06T15:25:09Z
 !theme plain
 skinparam padding 4
 skinparam defaultFontName "Segoe UI"
@@ -8,10 +9,19 @@ title Жизненный цикл сущностей данных\nAI Assistants
 |DevOps-инженер|
 start
 :Редактирование inventory.yml
-(параметры, домены, секреты);
+(параметры, домены, секреты,
+группы и пулы);
 
 |Ansible|
 :Запуск playbook.yml;
+:Проверка групп и пулов
+(DE-AC-002: фильтр aiproxy_pools,
+пользователи групп есть в passwd);
+if (Описание пулов допустимо?) then (да)
+else (нет)
+  :Остановка до изменения служб;
+  stop
+endif
 fork
   :Рендеринг squid.conf
   (access tier);
@@ -19,6 +29,7 @@ fork
     Домены (DE-DM-001)
     Параметры (DE-CF-001)
     cache_peer (DE-AC-001)
+    Пулы (DE-AC-002)
   end note
 fork again
   :Рендеринг squid.conf
@@ -46,8 +57,12 @@ end fork
 :Обработка CONNECT-запросов;
 :Проверка учётных данных
 (DE-CR-001: passwd);
+:Отказ 403 при пустом наборе
+upstream пользователя (DE-AC-002);
 :Фильтрация по доменам
 (DE-DM-001: ACL);
+:Выбор upstream из набора
+пользователя (DE-AC-002: userhash);
 :Запись в access.log
 (DE-LG-001);
 

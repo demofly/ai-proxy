@@ -1,0 +1,38 @@
+@startuml DE-AC-002-lifecycle
+' [AITS] 2026-11-06T15:25:09Z
+!theme plain
+skinparam defaultFontName "Segoe UI"
+skinparam padding 4
+top to bottom direction
+
+title Жизненный цикл описания групп и пулов
+
+[*] --> Described : оператор правит\nproxy_user_groups и proxy_pools\n(или оставляет умолчание)
+
+state "Описано в inventory" as Described
+state "Проверено" as Checked
+state "Отрендерено" as Rendered
+state "Применено" as Applied
+state "Отклонено" as Rejected
+
+Described --> Checked : pre_tasks:\nнет squid_upstream_hosts,\nфильтр aiproxy_pools,\nпользователи групп есть в passwd
+Described --> Rejected : ошибка модели\nлибо имя вне passwd
+Checked --> Rendered : шаблон squid.conf\nпроходит squid -k parse
+Checked --> Rejected : squid -k parse\nотклонил конфигурацию
+Rendered --> Applied : Squid перечитывает\nлибо запускается\nс новой конфигурацией
+Applied --> Described : правка групп или пулов,\nдобавление либо удаление upstream\nв группе inventory upstreams
+Rejected --> Described : оператор\nисправляет описание
+
+note right of Rejected
+  Развёртывание остановлено.
+  На узле действует
+  прежняя конфигурация Squid.
+end note
+
+note right of Applied
+  Удаление proxy_pools из inventory
+  возвращает пулы по умолчанию
+  default и reserve.
+end note
+
+@enduml

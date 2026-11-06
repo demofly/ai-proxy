@@ -1,4 +1,5 @@
 @startuml DD-PDM
+' [AITS] 2026-11-06T17:39:56Z
 !theme plain
 skinparam linetype ortho
 skinparam padding 4
@@ -23,9 +24,14 @@ package "Access Proxy (РФ)" as access_tier {
     acl allowed_domain_regexp dstdom_regex -i ...
     auth_param basic program ncsa_auth
     cache_peer <upstream> parent {proxy_port}
+    (только upstream активных пулов)
+    acl aiproxy_pool_<пул> proxy_auth
+    acl aiproxy_routed proxy_auth
+    cache_peer_access <узел> allow|deny
+    http_access deny authenticated !aiproxy_routed all
     access_log squid (native format)
     ..
-    права: 644 (root:root)
+    права: 640 (root:proxy)
     генерируется: Jinja2 шаблон
   }
 
@@ -148,6 +154,8 @@ package "Управляющий хост (Ansible)" as ansible_host {
     --
     all.children.access_proxies.hosts
     all.children.upstreams.hosts
+    access_proxies.vars.proxy_user_groups
+    access_proxies.vars.proxy_pools
     all.vars: конфигурационные параметры
     ..
     источник истины для параметров;
@@ -167,5 +175,6 @@ inventory --> nginx_access : "Jinja2 render"
 inventory --> nginx_upstream : "Jinja2 render"
 inventory --> fw_upstream : "Jinja2 render\n(выбранный бэкенд)"
 passwd_src ..> passwd : "копирование (тег passwd)"
+inventory ..> passwd_src : "сверка: пользователи групп\nесть в passwd"
 
 @enduml

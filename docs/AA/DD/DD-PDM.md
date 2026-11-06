@@ -1,8 +1,8 @@
 <!-- [AIGD] -->
-<!-- [AITS] 2026-11-06T11:08:38Z -->
+<!-- [AITS] 2026-11-06T17:39:56Z -->
 # DD-PDM — Физическая модель данных
 
-**Последняя правка AI:** 2026-11-06T11:08:38Z
+**Последняя правка AI:** 2026-11-06T17:39:56Z
 
 ## Описание
 
@@ -43,12 +43,12 @@ username:$2y$12$соль-и-хеш
 
 | Параметр | Значение |
 |---|---|
-| **LDM-сущности** | Domain Rule, Config Parameter |
-| **DE** | [DE-DM-001](DE/DE-DM-001.md), [DE-CF-001](DE/DE-CF-001.md) |
+| **LDM-сущности** | Domain Rule, Config Parameter, Pool, User Upstream (выводимая) |
+| **DE** | [DE-DM-001](DE/DE-DM-001.md), [DE-CF-001](DE/DE-CF-001.md), [DE-AC-002](DE/DE-AC-002.md) |
 | **Путь** | `/etc/squid/squid.conf` |
 | **Формат** | Squid configuration directives |
 | **Кодировка** | UTF-8 |
-| **Права** | 644 (`root:root`) |
+| **Права** | 640 (`root:proxy`): несёт имена пользователей пулов |
 | **Генерация** | Ansible: Jinja2 template → rendered config |
 | **Компонент** | [C3-SA-001](../C3/C3-SA-001.md) — Squid Access Proxy |
 
@@ -65,12 +65,21 @@ acl allowed_domain_regexp dstdom_regex -i \.ai$ ...
 auth_param basic program /usr/lib/squid/basic_ncsa_auth /etc/squid/passwd
 auth_param basic realm "Squid Proxy Authentication"
 
-# Цепочка к upstream
-cache_peer <upstream_ip> parent {proxy_port} 0 no-query userhash ...
+# Цепочка к upstream — только upstream активных пулов
+cache_peer <upstream_ip> parent {proxy_port} 0 no-query userhash ... name=<узел inventory>
+
+# Пулы пользователей
+acl aiproxy_pool_<пул> proxy_auth REQUIRED | <имена по 20 в строке>
+acl aiproxy_routed proxy_auth <объединение пользователей активных пулов>
+cache_peer_access <узел> allow aiproxy_pool_<пул>
+cache_peer_access <узел> deny all
+http_access deny authenticated !aiproxy_routed all
 
 # Формат журнала — стандартный squid (native format)
 # AI-GENERATED — NOT REVIEWED: SECTION END
 ```
+
+Блок пулов выпускается при включённой проверке подлинности. Пул активен, если у него есть и пользователи, и upstream. Без активных пулов вместо правила отказа выпускается `http_access deny all`. Правила рендера и пример — [DE-AC-002](DE/DE-AC-002.md). Имена пользователей групп, кроме особой группы `all`, оказываются в этом файле с правами 644.
 
 ### 3. squid.conf (upstream) — конфигурация upstream-прокси
 
@@ -139,8 +148,8 @@ table inet filter {
 
 | Параметр | Значение |
 |---|---|
-| **LDM-сущность** | Config Parameter, Secret |
-| **DE** | [DE-CF-001](DE/DE-CF-001.md), [DE-SC-001](DE/DE-SC-001.md) |
+| **LDM-сущность** | Config Parameter, Secret, User Group, Group Member, Pool, Pool Group, Pool Upstream, Upstream Host |
+| **DE** | [DE-CF-001](DE/DE-CF-001.md), [DE-SC-001](DE/DE-SC-001.md), [DE-AC-002](DE/DE-AC-002.md) |
 | **Путь** | `Servers/deploy/inventory.yml` (в рабочем каталоге, вне контроля версий; в репозитории — образец `inventory.yml.sample`) |
 | **Формат** | YAML |
 | **Кодировка** | UTF-8 |
@@ -160,6 +169,9 @@ all:
         proxy_role: access
         proxy_port: 443
         enable_auth: true
+        proxy_user_groups: {<группа>: [<пользователь>, ...]}
+        proxy_pools:
+          - {name: <пул>, groups: [<группа> | all], upstreams: all | [<узел>, ...]}
         ...
     upstreams:
       hosts:
@@ -311,6 +323,7 @@ vrrp_instance AI_PROXY {
 - [C2-FR-005](../C2/C2-FR-005.md) — Журналирование (access.log)
 - [C2-FR-006](../C2/C2-FR-006.md) — MTProxy (mtg.toml)
 - [C2-FR-008](../C2/C2-FR-008.md) — Развёртывание (inventory.yml)
+- [C2-FR-009](../C2/C2-FR-009.md) — Пулы пользователей и upstream (inventory.yml, squid.conf access)
 - [C2-NF-001](../C2/C2-NF-001.md) — Высокая доступность (keepalived.conf)
 - [C2-NF-002](../C2/C2-NF-002.md) — Безопасность (nftables.conf, passwd, mtg.toml)
 
@@ -319,4 +332,5 @@ vrrp_instance AI_PROXY {
 | Дата | Уровень | Обоснование | Корректирующее действие |
 |------|---------|-------------|-------------------------|
 | 2026-08-29 | 4 - Conformant | Пути, права, форматы и источники порождения сверены с задачами развёртывания; добавлены хранилища резолвера и второго бэкенда экрана | - |
+| 2026-11-06 | 4 - Conformant | Директивы пулов в squid.conf access и переменные пулов в inventory.yml сверены с шаблоном `squid-access.conf.j2` и образцом инвентори рабочего дерева | - |
 <!-- [/AIGD] -->

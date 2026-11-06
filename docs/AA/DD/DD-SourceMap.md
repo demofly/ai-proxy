@@ -1,7 +1,8 @@
 <!-- [AIGD] -->
+<!-- [AITS] 2026-11-06T15:25:09Z -->
 # DD-SourceMap — Карта источников данных
 
-**Последняя правка AI:** 2026-10-19
+**Последняя правка AI:** 2026-11-06T15:25:09Z
 
 ## Описание
 
@@ -13,6 +14,7 @@
 |---|---|---|---|---|---|
 | Учётные данные | [DE-CR-001](DE/DE-CR-001.md) | htpasswd CLI | `/etc/squid/passwd` | htpasswd (NCSA) | `htpasswd`, `basic_ncsa_auth`, `passwd` |
 | ACL (IP) | [DE-AC-001](DE/DE-AC-001.md) | inventory.yml (`ansible_host`) | `/etc/squid/squid.conf`, `/etc/nftables.conf` | Squid ACL / nft rules | `acl access_proxy`, `http_access`, `crowdsec-blacklists` |
+| Группы пользователей и пулы upstream | [DE-AC-002](DE/DE-AC-002.md) | inventory.yml (`access_proxies.vars`: `proxy_user_groups`, `proxy_pools`), умолчание — задача плейбука «Определить пулы upstream для Squid на access» | `/etc/squid/squid.conf` на access-узлах | YAML → Squid ACL `proxy_auth`, `cache_peer_access` | `proxy_user_groups`, `proxy_pools`, `aiproxy_pools`, `_squid_pools`, `aiproxy_pool_`, `aiproxy_routed` |
 | Белый список доменов | [DE-DM-001](DE/DE-DM-001.md) | inventory.yml (`allowed_domains`, `allowed_domain_patterns`) | `/etc/squid/squid.conf` (ACL blocks) | Squid ACL directives | `acl allowed_domains`, `acl allowed_domain_patterns`, `dstdomain`, `dstdom_regex` |
 | Конфигурационные параметры | [DE-CF-001](DE/DE-CF-001.md) | inventory.yml | Все generated configs | YAML → rendered configs | `inventory.yml`, `.j2` templates, `vars:` |
 | Записи журнала | [DE-LG-001](DE/DE-LG-001.md) | Squid daemon | `/var/log/squid/access.log` | Squid native logformat | `access_log daemon:... squid`, `acquis.yaml` |
@@ -45,6 +47,14 @@
 | `*.j2` | Шаблоны Jinja2 | `squid-access.conf.j2`, `squid-upstream.conf.j2`, `nftables-upstream.conf.j2`, `iptables-upstream.rules.j2`, `unbound.conf.j2`, `mtg.toml.j2`, `keepalived.conf.j2` |
 | `{{ variable }}` | Подстановка переменных | `{{ proxy_port }}`, `{{ mtproxy_secret }}` |
 | `{% for %}` | Итерация по спискам | `{% for domain in allowed_domains %}` |
+
+### Фильтры Ansible (проверка и разрешение моделей)
+
+| Паттерн | Описание | Пример |
+|---|---|---|
+| `filter_plugins/*.py` | Собственные фильтры плейбука | `filter_plugins/pools.py` |
+| `aiproxy_pools` | Проверка групп и пулов, раскрытие групп в имена пользователей и `upstreams: all` в состав группы | `proxy_pools \| aiproxy_pools(proxy_user_groups, groups['upstreams'])` |
+| `aiproxy_passwd_users`, `aiproxy_group_users` | Имена из файла паролей и из групп для сверки | задача «Проверить, что пользователи групп есть в файле паролей» |
 
 ### Целевые конфигурации (persistent)
 
@@ -88,4 +98,5 @@
 | Дата | Уровень | Обоснование | Корректирующее действие |
 |------|---------|-------------|-------------------------|
 | 2026-08-29 | 4 - Conformant | Перечень целевых конфигураций сверен с задачами плейбука и ролей | - |
+| 2026-11-06 | 4 - Conformant | Добавлен источник групп и пулов и паттерны фильтров по `filter_plugins/pools.py` и задачам плейбука рабочего дерева | - |
 <!-- [/AIGD] -->

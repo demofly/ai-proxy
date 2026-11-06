@@ -1,7 +1,8 @@
 <!-- [AIGD] -->
+<!-- [AITS] 2026-11-06T15:25:09Z -->
 # DE-CF-001 — Конфигурационные параметры
 
-**Последняя правка AI:** 2026-10-19
+**Последняя правка AI:** 2026-11-06T15:25:09Z
 
 ## Описание
 
@@ -61,6 +62,8 @@
 | `enable_caching` | boolean | `true` | Включение кеширования |
 | `behind_nginx` | boolean | `true` | Squid за nginx |
 | `squid_local_port` | integer | `3128` | Локальный порт Squid (за nginx) |
+| `proxy_user_groups` | map[string → list[string]] | `{}` | Группы пользователей: имя группы → имена из файла паролей. Модель и ограничения — [DE-AC-002](DE-AC-002.md) |
+| `proxy_pools` | list[map] | пулы `default` (все пользователи, все upstream) и `reserve` (пустой) | Пулы: группы → набор upstream. Модель и ограничения — [DE-AC-002](DE-AC-002.md) |
 | `enable_keepalived` | boolean | `false` | Включение Keepalived |
 | `keepalived_vip` | string (IPv4) | Не задан; `192.0.2.10` в образце | Виртуальный IP при включённом VRRP |
 | `keepalived_vrid` | integer | `51` | VRRP Router ID |
@@ -73,6 +76,8 @@
 | `ansible_host` | string (IPv4) | IP-адрес хоста |
 | `keepalived_state` | enum {MASTER, BACKUP} | Роль в VRRP |
 | `keepalived_priority` | integer (1–255) | Приоритет VRRP |
+
+Прежний параметр узла `squid_upstream_hosts` упразднён: заданный, он останавливает развёртывание с указанием перенести перечень в `proxy_pools`. Переопределения пулов на отдельный access нет.
 
 ### Upstream (`upstreams.vars`)
 
@@ -111,10 +116,12 @@
 - [C2-NF-001](../../C2/C2-NF-001.md) — Высокая доступность (keepalived_*)
 - [C2-NF-003](../../C2/C2-NF-003.md) — Производительность (SMP, memory)
 - [C3-AD-001](../../C3/C3-AD-001.md) — Ansible Deployment System
+- [C2-FR-009](../../C2/C2-FR-009.md) — Пулы пользователей и upstream (`proxy_user_groups`, `proxy_pools`)
 
 ## Статус соответствия
 
 | Дата | Уровень | Обоснование | Корректирующее действие |
 |------|---------|-------------|-------------------------|
 | 2026-08-29 | 4 - Conformant | Источник истины и порядок хранения сверены с состоянием инвентори вне контроля версий | - |
+| 2026-11-06 | 4 - Conformant | Добавлены `proxy_user_groups` и `proxy_pools`, отмечено упразднение `squid_upstream_hosts` по образцу инвентори и задачам плейбука рабочего дерева | - |
 <!-- [/AIGD] -->

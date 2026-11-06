@@ -1,3 +1,4 @@
+<!-- [AITS] 2026-11-06T17:48:26Z -->
 # MTProxy: единый секрет и fake-TLS SNI max.ru
 
 Готовый фрагмент для `all.vars` рабочего `inventory.yml`:
@@ -55,11 +56,4 @@ PROXY-заголовку. Исходный адрес клиента на upstre
 ssh root@<upstream-host> 'systemctl status mtg nginx'
 ssh root@<upstream-host> 'journalctl -u mtg -n 50'
 ssh root@<access-host> 'nginx -t'
-```
-
-Локальные проверки без рабочих серверов:
-
-```bash
-python3 Servers/deploy/tests/check_mtproxy_cluster.py
-python3 -m unittest discover -s Servers/deploy/tests -p 'test_mtproxy_cluster.py'
 ```

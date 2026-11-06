@@ -1,4 +1,5 @@
 @startuml C2-NF-004-scaling-flow
+' [AITS] 2026-11-06T15:54:20Z
 !theme plain
 skinparam backgroundColor #FEFEFE
 skinparam defaultFontName "Segoe UI"
@@ -18,7 +19,7 @@ fork
   :Установить Squid (upstream),\nnginx SNI, mtg, CrowdSec,\nnftables;
 fork again
   :SSH → все access-ноды;
-  :Перегенерировать squid.conf\n(новый cache_peer\nиз {% for upstream in\ngroups['upstreams'] %});
+  :Перегенерировать squid.conf\n(cache_peer на каждый узел из peers —\nобъединения upstream активных пулов:\nновый узел попадает в peers,\nесли входит в активный пул,\nв том числе с upstreams: all);
   :squid -k reconfigure;
 end fork
 
